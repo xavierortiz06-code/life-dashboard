@@ -1548,7 +1548,7 @@ function BudgetPlan({ planRows, setPlanRows, planNextId, setPlanNextId, planInco
                         {(parseFloat(row.pct) || 0).toFixed(1)}
                       </span>
                       <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>%</span>
-                      <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.7, marginLeft: 1 }}>
+                      <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginLeft: 1 }}>
                         <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
                       </svg>
                     </div>

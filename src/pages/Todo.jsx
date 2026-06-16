@@ -140,7 +140,7 @@ export default function Todo() {
   const [completing, setCompleting] = useState(new Set())
   function completeTask(id, fn) {
     setCompleting(s => new Set([...s, id]))
-    setTimeout(() => { fn(); setCompleting(s => { const n = new Set(s); n.delete(id); return n }) }, 300)
+    setTimeout(() => { fn(); setCompleting(s => { const n = new Set(s); n.delete(id); return n }) }, 500)
   }
 
   // ─────────────────────────────────────────────────────────
@@ -1593,7 +1593,7 @@ function FocusRow({ task, onToggle, onDelete, onUpdate }) {
   function handleCheck() {
     if (!done) {
       setCompleting(true)
-      setTimeout(() => { onToggle(); setCompleting(false) }, 300)
+      setTimeout(() => { onToggle(); setCompleting(false) }, 500)
     } else {
       onToggle()
     }
@@ -1628,7 +1628,7 @@ function FocusRow({ task, onToggle, onDelete, onUpdate }) {
         <button
           onClick={() => setShowNote(s => !s)}
           title="Notes"
-          style={{ background: 'none', border: 'none', cursor: 'pointer', color: task.notes ? 'var(--accent)' : 'var(--text-light)', fontSize: 13, opacity: 0.7, padding: '2px 4px', flexShrink: 0 }}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: task.notes ? 'var(--accent)' : 'var(--text-light)', fontSize: 13, padding: '2px 4px', flexShrink: 0 }}
         >
           {task.notes ? '📝' : '○'}
         </button>
