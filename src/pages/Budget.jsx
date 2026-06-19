@@ -2519,6 +2519,20 @@ function Overview({ planRows, entries = [], savingsGoals = [], snapshotChecking,
 
   const [selectedWeek, setSelectedWeek] = useState(() => getWeekKey(today()))
 
+  const [resetWeeks, setResetWeeks] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem('budget-reset-weeks') || '[]')) } catch { return new Set() }
+  })
+  const isReset = resetWeeks.has(selectedWeek)
+  function toggleReset() {
+    setResetWeeks(prev => {
+      const next = new Set(prev)
+      if (next.has(selectedWeek)) next.delete(selectedWeek)
+      else next.add(selectedWeek)
+      localStorage.setItem('budget-reset-weeks', JSON.stringify([...next]))
+      return next
+    })
+  }
+
   // ── Snapshot / reality-check state (owned by parent Budget, passed as props) ─
   const [editingField, setEditingField] = useState(null) // 'checking' | 'savings' | null
   const [snapInput,    setSnapInput]    = useState('')
@@ -2569,7 +2583,8 @@ function Overview({ planRows, entries = [], savingsGoals = [], snapshotChecking,
   const weekEntries    = entries.filter(e => getWeekKey(e.date) === selectedWeek)
   const weekIncome     = weekEntries.filter(e => e.type === 'income').reduce((s, e) => s + +e.amount, 0)
   const weekExpenses   = weekEntries.filter(e => e.type === 'expense')
-  const totalSpent     = weekExpenses.reduce((s, e) => s + +e.amount, 0)
+  const displayExpenses = isReset ? [] : weekExpenses
+  const totalSpent     = displayExpenses.reduce((s, e) => s + +e.amount, 0)
 
   // Checking snapshot: backsolve effective income so budget bars scale correctly
   // If user has $1,500 in checking after spending $300, effective income ≈ $1,800
@@ -2595,7 +2610,7 @@ function Overview({ planRows, entries = [], savingsGoals = [], snapshotChecking,
   const savedPct     = totalTarget > 0 ? Math.min((totalSaved / totalTarget) * 100, 100) : 0
 
   const catSpend = {}
-  for (const e of weekExpenses) {
+  for (const e of displayExpenses) {
     catSpend[e.category] = (catSpend[e.category] || 0) + +e.amount
   }
 
@@ -2605,7 +2620,7 @@ function Overview({ planRows, entries = [], savingsGoals = [], snapshotChecking,
   const donutData = planRows
     .map((row, idx) => ({ name: row.name, color: PLAN_COLORS[idx % PLAN_COLORS.length], spent: catSpend[row.name] || 0 }))
     .filter(d => d.spent > 0)
-  const uncat = weekExpenses.filter(e => !planRows.find(r => r.name === e.category)).reduce((s, e) => s + +e.amount, 0)
+  const uncat = displayExpenses.filter(e => !planRows.find(r => r.name === e.category)).reduce((s, e) => s + +e.amount, 0)
   if (uncat > 0) donutData.push({ name: 'Uncategorized', color: '#94a3b8', spent: uncat })
 
   const segments = []
@@ -2818,7 +2833,28 @@ function Overview({ planRows, entries = [], savingsGoals = [], snapshotChecking,
 
       {/* Category progress bars */}
       <div className="card" style={{ padding: '18px 20px' }}>
-        <div style={{ ...labelStyle, marginBottom: 16 }}>Budget vs Actual</div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={labelStyle}>Budget vs Actual</span>
+            {isReset && (
+              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--text-muted)', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 4, padding: '2px 6px' }}>
+                paused
+              </span>
+            )}
+          </div>
+          <button
+            onClick={toggleReset}
+            style={{
+              background: isReset ? 'rgba(107,227,164,0.1)' : 'rgba(255,255,255,0.04)',
+              border: isReset ? '1px solid rgba(107,227,164,0.25)' : '1px solid rgba(255,255,255,0.1)',
+              color: isReset ? 'var(--success)' : 'var(--text-muted)',
+              borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 600,
+              cursor: 'pointer', fontFamily: 'inherit', letterSpacing: '.02em',
+            }}
+          >
+            {isReset ? 'Restore' : 'Reset bars'}
+          </button>
+        </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           {planRows.map((row, idx) => {
             const color    = PLAN_COLORS[idx % PLAN_COLORS.length]
