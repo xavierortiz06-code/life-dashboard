@@ -1512,7 +1512,7 @@ function BudgetPlan({ planRows, setPlanRows, planNextId, setPlanNextId, planInco
                         onBlur={e => {
                           const val = parseFloat(e.target.value)
                           if (!isNaN(val) && val >= 0 && income > 0)
-                            setPct(row.id, Math.round(val / income * 1000) / 10)
+                            setPct(row.id, Math.round(val / income * 100000) / 1000)
                           setAmtEdits(m => { const n = { ...m }; delete n[row.id]; return n })
                         }}
                         onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
