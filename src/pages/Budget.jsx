@@ -1225,10 +1225,12 @@ function BudgetPlan({ planRows, setPlanRows, planNextId, setPlanNextId, planInco
       if (unlockedOthers.length === 0) {
         return rs.map(r => r.id === id ? { ...r, pct: String(newPct) } : r)
       }
-      const perOther = remaining / unlockedOthers.length
+      // Clamp to 0 — locked rows may already consume ≥100%, never push unlocked negative
+      const safeRemaining = Math.max(0, remaining)
+      const perOther = safeRemaining / unlockedOthers.length
       const rounded  = Math.round(perOther * 10) / 10
       const sumBase  = rounded * (unlockedOthers.length - 1)
-      const lastVal  = Math.round((remaining - sumBase) * 10) / 10
+      const lastVal  = Math.max(0, Math.round((safeRemaining - sumBase) * 10) / 10)
       const lastId   = unlockedOthers[unlockedOthers.length - 1].id
       return rs.map(r => {
         if (r.id === id) return { ...r, pct: String(newPct) }
