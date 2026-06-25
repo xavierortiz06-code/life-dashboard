@@ -1489,28 +1489,31 @@ export default function Schedule() {
               )
             })()}
 
-            {/* ── Weekly Goals ─────────────────────── */}
+            {/* ── To-Do tray (Week) — identical to Day tray ── */}
             {(() => {
-              const weekGoals = (data.weeklyGoals || {})[weekBase] || []
-              const goalsDone = weekGoals.filter(g => g.completed).length
-              const alreadyAdded = new Set(weekGoals.map(g => g.sourceId).filter(Boolean))
+              const weekPlacedIds = new Set(
+                getWeek(weekBase).flatMap(d =>
+                  Object.values(data.days[d] || {}).flat().map(t => t.sourceId).filter(Boolean)
+                )
+              )
+              const allChips = [
+                ...focusTasks.map(t => ({ id: t.id, title: t.title, _src: 'focus' })),
+                ...taskListItems.filter(t => !t.completed).map(t => ({ id: t.id, title: t.title, _src: 'task' })),
+              ]
+              const unplaced = allChips.filter(t => !weekPlacedIds.has(t.id))
+              const placed   = allChips.filter(t =>  weekPlacedIds.has(t.id))
 
               return (
                 <div className="card" style={{ padding: '12px 14px' }}>
-                  {/* Header — matches Day to-do tray style */}
                   <button
                     onClick={() => setWeekGoalsOpen(o => !o)}
                     style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text)', fontFamily: 'inherit', padding: 0 }}
                   >
-                    <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="#6366f1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                    <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="#f97316" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
                       <polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
                     </svg>
-                    <span style={{ fontSize: 13, fontWeight: 700, flex: 1, textAlign: 'left' }}>Weekly Goals</span>
-                    {weekGoals.length > 0 && (
-                      <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: goalsDone === weekGoals.length ? 'var(--success)' : 'var(--text-muted)', marginRight: 4 }}>
-                        {goalsDone}/{weekGoals.length}
-                      </span>
-                    )}
+                    <span style={{ fontSize: 13, fontWeight: 700, flex: 1, textAlign: 'left' }}>Your to-dos</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)', marginRight: 4 }}>drag into a day below</span>
                     <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
                       style={{ color: 'var(--text-muted)', transition: 'transform .2s', transform: weekGoalsOpen ? 'rotate(0)' : 'rotate(-90deg)', flexShrink: 0 }}>
                       <polyline points="6 9 12 15 18 9"/>
@@ -1519,156 +1522,59 @@ export default function Schedule() {
 
                   {weekGoalsOpen && (
                     <div style={{ marginTop: 10 }}>
-                      {/* Action buttons */}
-                      <div style={{ display: 'flex', gap: 6, marginBottom: weekGoals.length ? 10 : 0 }}>
-                        <button
-                          className="btn btn-ghost btn-sm"
-                          onClick={openPicker}
-                          style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 5 }}
-                        >
-                          <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <polyline points="8 17 12 21 16 17"/><line x1="12" y1="3" x2="12" y2="21"/>
-                          </svg>
-                          Import from To-Do
-                        </button>
-                        <button
-                          className="btn btn-ghost btn-sm"
-                          onClick={() => { setAddingGoal(true); setPickerOpen(false) }}
-                          style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 5 }}
-                        >
-                          <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-                          </svg>
-                          Add goal
-                        </button>
-                      </div>
-
-                      {/* Goal rows */}
-                      {weekGoals.map(goal => (
-                        <GoalRow
-                          key={goal.id}
-                          goal={goal}
-                          isDark={isDark}
-                          onToggle={() => toggleWeeklyGoal(weekBase, goal.id)}
-                          onDelete={() => deleteWeeklyGoal(weekBase, goal.id)}
-                        />
-                      ))}
-
-                      {/* Empty state */}
-                      {weekGoals.length === 0 && !addingGoal && !pickerOpen && (
+                      {allChips.length === 0 ? (
                         <div style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                          No goals set — import from To-Do or add one manually.
-                        </div>
-                      )}
-
-                      {/* Manual add row */}
-                      {addingGoal && (
-                        <div style={{ display: 'flex', gap: 6, marginTop: weekGoals.length ? 8 : 0 }}>
-                          <input
-                            ref={newGoalRef}
-                            value={newGoalText}
-                            onChange={e => setNewGoalText(e.target.value)}
-                            onKeyDown={e => {
-                              if (e.key === 'Enter') { addWeeklyGoal(weekBase, newGoalText); setNewGoalText(''); setAddingGoal(false) }
-                              if (e.key === 'Escape') { setAddingGoal(false); setNewGoalText('') }
-                            }}
-                            placeholder="Goal for this week…"
-                            style={{ flex: 1, fontSize: 13 }}
-                          />
-                          <button
-                            className="btn btn-primary btn-sm"
-                            disabled={!newGoalText.trim()}
-                            onClick={() => { addWeeklyGoal(weekBase, newGoalText); setNewGoalText(''); setAddingGoal(false) }}
-                          >Add</button>
-                          <button
-                            className="btn btn-ghost btn-sm"
-                            onClick={() => { setAddingGoal(false); setNewGoalText('') }}
-                            style={{ display: 'flex', alignItems: 'center' }}
-                          >
-                            <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-                            </svg>
-                          </button>
-                        </div>
-                      )}
-
-                      {/* To-Do picker */}
-                      {pickerOpen && (
-                    <div style={{
-                      marginTop: 12,
-                      border: '1px solid var(--border)',
-                      borderRadius: 10, overflow: 'hidden',
-                    }}>
-                      <div style={{
-                        padding: '8px 12px',
-                        borderBottom: '1px solid var(--border)',
-                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                      }}>
-                        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>Pick tasks to add as goals</span>
-                        <button
-                          onClick={() => setPickerOpen(false)}
-                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 14, lineHeight: 1, padding: '2px 4px' }}
-                          onMouseEnter={e => e.currentTarget.style.color = 'var(--text)'}
-                          onMouseLeave={e => e.currentTarget.style.color = 'var(--text-muted)'}
-                        >✕</button>
-                      </div>
-                      {pickerLoading ? (
-                        <div style={{ padding: '14px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                          <div className="skeleton" style={{ width: '70%', height: 10 }} />
-                          <div className="skeleton" style={{ width: '55%', height: 10 }} />
-                        </div>
-                      ) : pickerTasks.length === 0 ? (
-                        <div style={{ padding: '14px 12px', fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                          No active tasks found in To-Do.
+                          No tasks in To-Do yet.
                         </div>
                       ) : (
-                        <div style={{ maxHeight: 220, overflowY: 'auto' }}>
-                          {pickerTasks.map((task, i) => {
-                            const added = alreadyAdded.has(task.id)
-                            return (
-                              <div
-                                key={task.id}
-                                onClick={() => {
-                                  if (!added) {
-                                    addWeeklyGoal(weekBase, task.title, task.id)
-                                  }
-                                }}
-                                style={{
-                                  display: 'flex', alignItems: 'center', gap: 10,
-                                  padding: '9px 12px',
-                                  borderBottom: i < pickerTasks.length - 1 ? '1px solid var(--border)' : 'none',
-                                  cursor: added ? 'default' : 'pointer',
-                                  opacity: added ? 0.45 : 1,
-                                  transition: 'background .12s',
-                                }}
-                                onMouseEnter={e => { if (!added) e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)' }}
-                                onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
-                              >
-                                <span style={{ fontSize: 13, flex: 1, color: 'var(--text)' }}>{task.title}</span>
-                                <span style={{
-                                  fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 99,
-                                  background: task._src === 'plan' ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.07)',
-                                  color: task._src === 'plan' ? '#6366f1' : 'var(--text-muted)',
-                                  flexShrink: 0,
-                                }}>
-                                  {task._src === 'plan' ? 'This week' : 'Backlog'}
-                                </span>
-                                {added ? (
-                                  <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--success)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                                    <polyline points="20 6 9 17 4 12"/>
-                                  </svg>
-                                ) : (
-                                  <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2.5" strokeLinecap="round" style={{ flexShrink: 0 }}>
-                                    <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-                                  </svg>
-                                )}
-                              </div>
-                            )
-                          })}
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+                          {unplaced.map(chip => (
+                            <div
+                              key={`${chip._src}-${chip.id}`}
+                              draggable
+                              onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; setDragTask(chip) }}
+                              onDragEnd={() => { setDragTask(null); setDragOverTarget(null) }}
+                              style={{
+                                display: 'flex', alignItems: 'center', gap: 6, padding: '6px 11px', borderRadius: 8,
+                                background: dragTask?.id === chip.id ? 'rgba(99,102,241,0.18)' : isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)',
+                                border: `1px solid ${dragTask?.id === chip.id ? 'rgba(99,102,241,0.5)' : 'var(--border)'}`,
+                                fontSize: 12, cursor: 'grab', userSelect: 'none', color: 'var(--text)',
+                              }}
+                            >
+                              <svg width={9} height={9} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round">
+                                <circle cx="9" cy="5" r="1" fill="currentColor"/><circle cx="9" cy="12" r="1" fill="currentColor"/><circle cx="9" cy="19" r="1" fill="currentColor"/>
+                                <circle cx="15" cy="5" r="1" fill="currentColor"/><circle cx="15" cy="12" r="1" fill="currentColor"/><circle cx="15" cy="19" r="1" fill="currentColor"/>
+                              </svg>
+                              {chip.title}
+                              {chip._src === 'focus' && <span style={{ fontSize: 8, fontWeight: 700, color: '#6366f1' }}>FOCUS</span>}
+                            </div>
+                          ))}
+                          {placed.map(chip => (
+                            <div
+                              key={`${chip._src}-${chip.id}`}
+                              style={{
+                                display: 'flex', alignItems: 'center', gap: 6, padding: '6px 11px', borderRadius: 8,
+                                background: isDark ? 'rgba(255,255,255,0.025)' : 'rgba(0,0,0,0.025)',
+                                border: '1px solid rgba(107,227,164,0.2)',
+                                fontSize: 12, cursor: 'default', userSelect: 'none', color: 'var(--text-muted)', opacity: 0.5,
+                              }}
+                            >
+                              <svg width={9} height={9} viewBox="0 0 24 24" fill="none" stroke="var(--success)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                <polyline points="20 6 9 17 4 12"/>
+                              </svg>
+                              {chip.title}
+                            </div>
+                          ))}
                         </div>
                       )}
-                    </div>
-                  )}
+                      {dragTask && (
+                        <div style={{ marginTop: 10, fontSize: 11, color: 'var(--accent)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 }}>
+                          <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="19 12 12 19 5 12"/><polyline points="19 5 12 12 5 5"/>
+                          </svg>
+                          Drop onto a day below
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
