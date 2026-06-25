@@ -119,6 +119,11 @@ export default function Todo() {
   const [parseLoading, setParseLoading] = useState(false)
   const [parseError,   setParseError]   = useState(null)
 
+  // ── Claude planning state ──
+  const [claudeTasks,    setClaudeTasks]    = useState([])
+  const [claudeInput,    setClaudeInput]    = useState('')
+  const [claudeAdding,   setClaudeAdding]   = useState(false)
+
   // ── Focus state ──
   const [focusTasks,     setFocusTasks]     = useState(todoCache?.focusTasks ?? [])
   const [focusInput,     setFocusInput]     = useState('')
@@ -158,12 +163,14 @@ export default function Todo() {
       { data: tItems,  error: e3 },
       { data: fTasks,  error: e4 },
       { data: yFocus,  error: e5 },
+      { data: cTasks },
     ] = await Promise.all([
       supabase.from('routine_tasks').select('*').eq('user_id', user.id).eq('active', true).order('position').order('created_at'),
       supabase.from('routine_completions').select('routine_task_id').eq('user_id', user.id).eq('completed_date', TODAY),
       supabase.from('task_list').select('*').eq('user_id', user.id).order('position').order('created_at'),
       supabase.from('focus_tasks').select('*').eq('user_id', user.id).eq('focus_date', TODAY).order('position').order('created_at'),
       supabase.from('focus_tasks').select('*').eq('user_id', user.id).eq('focus_date', YESTERDAY).eq('completed', false),
+      supabase.from('claude_tasks').select('*').eq('user_id', user.id).order('position').order('created_at'),
     ])
 
     const firstError = e1 || e2 || e3 || e4 || e5
@@ -177,6 +184,7 @@ export default function Todo() {
     setCompletedToday(new Set((rComp || []).map(r => r.routine_task_id)))
     setTaskItems(tItems || [])
     setFocusTasks(fTasks || [])
+    setClaudeTasks(cTasks || [])
 
     const yItems = yFocus || []
     // Tasks linked to the task list go back automatically — only offer carryover
@@ -556,6 +564,41 @@ export default function Todo() {
   }
 
   // ─────────────────────────────────────────────────────────
+  // CLAUDE PLANNING mutations
+  // ─────────────────────────────────────────────────────────
+  async function addClaudeTask() {
+    const title = claudeInput.trim()
+    if (!title) return
+    setClaudeAdding(true)
+    const { data, error } = await supabase.from('claude_tasks').insert({
+      user_id: user.id, title, completed: false, position: claudeTasks.length,
+    }).select().single()
+    if (!error && data) setClaudeTasks(t => [...t, data])
+    setClaudeInput('')
+    setClaudeAdding(false)
+  }
+
+  async function toggleClaudeTask(id) {
+    const task = claudeTasks.find(t => t.id === id)
+    if (!task) return
+    const completed = !task.completed
+    setClaudeTasks(t => t.map(x => x.id === id ? { ...x, completed } : x))
+    await supabase.from('claude_tasks').update({ completed }).eq('id', id).eq('user_id', user.id)
+  }
+
+  async function deleteClaudeTask(id) {
+    setClaudeTasks(t => t.filter(x => x.id !== id))
+    await supabase.from('claude_tasks').delete().eq('id', id).eq('user_id', user.id)
+  }
+
+  async function clearCompletedClaude() {
+    const ids = claudeTasks.filter(t => t.completed).map(t => t.id)
+    if (!ids.length) return
+    setClaudeTasks(t => t.filter(x => !x.completed))
+    await supabase.from('claude_tasks').delete().in('id', ids).eq('user_id', user.id)
+  }
+
+  // ─────────────────────────────────────────────────────────
   // Computed
   // ─────────────────────────────────────────────────────────
   const routineDone  = routineTasks.filter(t => completedToday.has(t.id))
@@ -639,6 +682,9 @@ export default function Todo() {
           </button>
           <button className={`tab-btn${tab === 'tasks' ? ' active' : ''}`} onClick={() => setTab('tasks')}>
             Task List
+          </button>
+          <button className={`tab-btn${tab === 'claude' ? ' active' : ''}`} onClick={() => setTab('claude')}>
+            Claude To-Do
           </button>
           <button className={`tab-btn${tab === 'focus' ? ' active' : ''}`} onClick={() => setTab('focus')}>
             Today's Focus
@@ -1304,6 +1350,65 @@ export default function Todo() {
                     </div>
                   )}
                 </div>
+              </div>
+            )}
+
+            {/* ══════════════════════════════════════════════
+                TAB — CLAUDE TO-DO
+            ══════════════════════════════════════════════ */}
+            {tab === 'claude' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+                {/* Add input */}
+                <div className="card" style={{ padding: '14px 16px' }}>
+                  <form onSubmit={e => { e.preventDefault(); addClaudeTask() }}
+                    style={{ display: 'flex', gap: 8 }}>
+                    <input
+                      className="goal-input"
+                      style={{ flex: 1, fontSize: 13 }}
+                      placeholder="Add a planning task…"
+                      value={claudeInput}
+                      onChange={e => setClaudeInput(e.target.value)}
+                      autoFocus
+                    />
+                    <button type="submit" className="btn btn-primary btn-sm" disabled={claudeAdding || !claudeInput.trim()}>
+                      Add
+                    </button>
+                  </form>
+                </div>
+
+                {/* Task list */}
+                <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                  {claudeTasks.length === 0 ? (
+                    <div style={{ padding: '20px 16px', fontSize: 13, color: 'var(--text-muted)', textAlign: 'center' }}>
+                      No tasks yet — add something above.
+                    </div>
+                  ) : (
+                    <div>
+                      {claudeTasks.filter(t => !t.completed).map(task => (
+                        <div key={task.id} className="goal-row" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px' }}>
+                          <input type="checkbox" className="goal-check" checked={false} onChange={() => toggleClaudeTask(task.id)} />
+                          <span style={{ flex: 1, fontSize: 13, color: 'var(--text)' }}>{task.title}</span>
+                          <button className="goal-del" onClick={() => deleteClaudeTask(task.id)}>×</button>
+                        </div>
+                      ))}
+                      {claudeTasks.filter(t => t.completed).map(task => (
+                        <div key={task.id} className="goal-row" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', opacity: 0.45 }}>
+                          <input type="checkbox" className="goal-check" checked={true} onChange={() => toggleClaudeTask(task.id)} />
+                          <span style={{ flex: 1, fontSize: 13, color: 'var(--text-muted)', textDecoration: 'line-through' }}>{task.title}</span>
+                          <button className="goal-del" onClick={() => deleteClaudeTask(task.id)}>×</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Clear completed */}
+                {claudeTasks.some(t => t.completed) && (
+                  <button className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start' }} onClick={clearCompletedClaude}>
+                    Clear completed
+                  </button>
+                )}
               </div>
             )}
 
