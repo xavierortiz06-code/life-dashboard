@@ -5,6 +5,7 @@ import { useApp } from '../contexts/AppContext'
 import { getMacroGoals } from '../lib/goals'
 import { getActiveDate } from '../lib/dateUtils'
 import ActionChat from '../components/ActionChat'
+import { pctColor } from '../components/TodoRing'
 
 const TODAY = getActiveDate()
 
@@ -61,28 +62,37 @@ function computeDateStreak(dateSet) {
 
 // ── Task completion ring ──────────────────────────────────────────────
 function TaskRing({ done, total, size = 136 }) {
-  const pct  = total > 0 ? Math.round(done / total * 100) : 0
-  const SIZE = size, SW = size < 120 ? 7 : 9
-  const r    = SIZE / 2 - SW
-  const circ = 2 * Math.PI * r
-  const dash = circ * pct / 100
-  const cx   = SIZE / 2
-  const color = pct === 100 ? 'var(--success)' : pct > 50 ? '#6366f1' : '#6366f1'
+  const pct   = total > 0 ? Math.round(done / total * 100) : 0
+  const SIZE  = size
+  const SW    = size < 120 ? 7 : 9
+  const r     = SIZE / 2 - SW
+  const circ  = 2 * Math.PI * r
+  const offset = circ * (1 - pct / 100)
+  const cx    = SIZE / 2
+  const color = pctColor(pct)
+  const filterId = `trGlow${size}`
 
   return (
     <div style={{ position: 'relative', width: SIZE, height: SIZE }}>
-      <svg width={SIZE} height={SIZE} style={{ transform: 'rotate(-90deg)' }}>
-        <circle cx={cx} cy={cx} r={r} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={SW} />
-        <circle cx={cx} cy={cx} r={r} fill="none"
-          stroke={pct === 100 ? 'var(--success)' : 'url(#tGrad)'} strokeWidth={SW}
-          strokeLinecap="round" strokeDasharray={`${dash} ${circ}`}
-          style={{ transition: 'stroke-dasharray .7s ease' }} />
+      <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`}>
         <defs>
-          <linearGradient id="tGrad" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2={SIZE} y2={SIZE}>
-            <stop offset="0%" stopColor="#6366f1" />
-            <stop offset="100%" stopColor="#06b6d4" />
-          </linearGradient>
+          <filter id={filterId}>
+            <feGaussianBlur stdDeviation="2.5" result="blur" />
+            <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+          </filter>
         </defs>
+        {/* Track */}
+        <circle cx={cx} cy={cx} r={r} fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth={SW} />
+        {/* Fill */}
+        <circle cx={cx} cy={cx} r={r} fill="none"
+          stroke={color} strokeWidth={SW}
+          strokeLinecap="round"
+          strokeDasharray={circ}
+          strokeDashoffset={offset}
+          transform={`rotate(-90 ${cx} ${cx})`}
+          filter={`url(#${filterId})`}
+          style={{ transition: 'stroke-dashoffset 0.7s cubic-bezier(0.22,1,0.36,1), stroke 0.7s ease' }}
+        />
       </svg>
 
       <div style={{
@@ -96,13 +106,8 @@ function TaskRing({ done, total, size = 136 }) {
         <div style={{ fontSize: SIZE < 120 ? 9 : 11, color: 'var(--text-muted)' }}>
           of {total}
         </div>
-        {pct > 0 && SIZE >= 120 && (
-          <div style={{
-            marginTop: 6, fontSize: 10, fontWeight: 700,
-            color, fontFamily: 'var(--mono)',
-            padding: '2px 8px', borderRadius: 99,
-            background: pct === 100 ? 'rgba(107,227,164,0.12)' : 'rgba(99,102,241,0.12)',
-          }}>
+        {SIZE >= 120 && (
+          <div style={{ marginTop: 4, fontSize: 10, fontWeight: 700, color, fontFamily: 'var(--mono)' }}>
             {pct}%
           </div>
         )}
