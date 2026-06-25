@@ -348,9 +348,21 @@ export default function Schedule() {
       .order('position').order('created_at', { ascending: false })
       .then(({ data: d }) => setTaskListItems(d || []))
     supabase.from('routine_tasks')
-      .select('id, title, position').eq('user_id', user.id).eq('active', true)
+      .select('id, title, position, schedule_block').eq('user_id', user.id).eq('active', true)
       .order('position').order('created_at')
-      .then(({ data: d }) => setTodoRoutines(d || []))
+      .then(({ data: d, error }) => {
+        if (error) {
+          // schedule_block column not added yet — fall back to basic select
+          return supabase.from('routine_tasks')
+            .select('id, title, position').eq('user_id', user.id).eq('active', true)
+            .order('position').order('created_at')
+            .then(({ data: d2 }) => setTodoRoutines(d2 || []))
+        }
+        setTodoRoutines(d || [])
+        const dbAssign = {}
+        ;(d || []).forEach(rt => { if (rt.schedule_block) dbAssign[rt.id] = rt.schedule_block })
+        if (Object.keys(dbAssign).length > 0) setRoutineAssignRaw(dbAssign)
+      })
     // Migrate localStorage → Supabase on first run, then load current week
     ensureSupabaseSync().then(() => loadWeekTasksFromSupabase(getWeekMonday(TODAY)))
   }, [user?.id])
