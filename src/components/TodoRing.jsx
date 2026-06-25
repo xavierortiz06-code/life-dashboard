@@ -54,6 +54,8 @@ export default function TodoRing() {
   useEffect(() => {
     if (!user?.id) return
     load()
+
+    // Optimistic delta from same-tab toggles — no network round trip
     const handleTodosChanged = (e) => {
       if (e?.detail?.doneDelta !== undefined) {
         setDone(prev => Math.max(0, prev + e.detail.doneDelta))
@@ -63,11 +65,28 @@ export default function TodoRing() {
     }
     window.addEventListener('todos-changed', handleTodosChanged)
 
+    const today = getActiveDate()
     const channel = supabase
       .channel(`ring_${user.id}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'schedule_day_tasks',    filter: `user_id=eq.${user.id}` }, load)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'routine_completions',   filter: `user_id=eq.${user.id}` }, load)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'routine_tasks',         filter: `user_id=eq.${user.id}` }, load)
+      // schedule_day_tasks: apply delta from payload, skip full reload
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'schedule_day_tasks', filter: `user_id=eq.${user.id}` }, ({ new: nr, old: or }) => {
+        if (nr.task_date !== today) return
+        if (nr.completed === or.completed) return
+        setDone(prev => Math.max(0, prev + (nr.completed ? 1 : -1)))
+      })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'schedule_day_tasks', filter: `user_id=eq.${user.id}` }, ({ new: nr }) => {
+        if (nr.task_date !== today) return
+        setTotal(prev => prev + 1)
+        if (nr.completed) setDone(prev => prev + 1)
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'schedule_day_tasks', filter: `user_id=eq.${user.id}` }, ({ old: or }) => {
+        if (or.task_date !== today) return
+        setTotal(prev => Math.max(0, prev - 1))
+        if (or.completed) setDone(prev => Math.max(0, prev - 1))
+      })
+      // routine_completions and routine_tasks: full reload (infrequent)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'routine_completions', filter: `user_id=eq.${user.id}` }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'routine_tasks',       filter: `user_id=eq.${user.id}` }, load)
       .subscribe()
 
     return () => {
