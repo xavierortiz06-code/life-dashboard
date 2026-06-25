@@ -8,6 +8,7 @@ const TODAY = getActiveDate()
 const STORE              = 'schedule-planner'
 const ROUTINE_KEY        = 'schedule-routines'
 const ROUTINE_ASSIGN_KEY = 'schedule-routine-assign'  // { routineTaskId: secId } — where each To-Do routine item sits
+const SYNC_FLAG          = 'schedule-sb-v1'           // set after one-time localStorage → Supabase migration
 
 function loadRoutineAssign() {
   try { return JSON.parse(localStorage.getItem(ROUTINE_ASSIGN_KEY) || '{}') } catch { return {} }
@@ -48,6 +49,19 @@ const TAG_META = {
 
 // ── Pure helpers ──────────────────────────────────────────────
 function mkId() { return Math.random().toString(36).slice(2, 11) }
+
+function rowToTask(row) {
+  return {
+    id: row.id,
+    title: row.title,
+    time: row.time_slot || null,
+    tag: row.tag || null,
+    completed: row.completed || false,
+    source: row.source_type || 'manual',
+    sourceId: row.source_id || null,
+    sourceType: row.linked_type || null,
+  }
+}
 
 function isWeekend(d) {
   const wd = new Date(d + 'T12:00:00').getDay()
@@ -171,7 +185,7 @@ export default function Schedule() {
   // Drag state for the Routine tab
   const [routineDrag,       setRoutineDrag]       = useState(null)
   const [routineDragOverSec, setRoutineDragOverSec] = useState(null)
-  const [todoTrayOpen,   setTodoTrayOpen]   = useState(true)
+  const [todoTrayOpen,   setTodoTrayOpen]   = useState(false)
   const addInputRef    = useRef(null)
   const newGoalRef     = useRef(null)
   const routineAddRef  = useRef(null)
@@ -184,6 +198,129 @@ export default function Schedule() {
       return next
     })
   }
+
+  // ── Supabase cross-device sync ─────────────────────────────
+  // One-time migration: push existing localStorage tasks to Supabase so no
+  // data is lost when first enabling sync on the primary device.
+  async function ensureSupabaseSync() {
+    if (localStorage.getItem(SYNC_FLAG) || !user?.id) return
+    const stored = loadStore()
+    const rows = []
+    for (const [d, day] of Object.entries(stored.days || {})) {
+      for (const [secId, tasks] of Object.entries(day)) {
+        if (!Array.isArray(tasks)) continue
+        tasks.forEach((task, pos) => {
+          if (!task.title) return
+          rows.push({
+            id: crypto.randomUUID(),
+            user_id: user.id,
+            task_date: d,
+            section_id: secId,
+            title: task.title,
+            time_slot: task.time || null,
+            tag: task.tag || null,
+            completed: task.completed || false,
+            completed_at: task.completed ? new Date().toISOString() : null,
+            position: pos,
+            source_type: task.source || 'manual',
+            source_id: null,
+            linked_type: task.sourceType || null,
+          })
+        })
+      }
+    }
+    const CHUNK = 50
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const { error } = await supabase.from('schedule_day_tasks').insert(rows.slice(i, i + CHUNK))
+      if (error) return  // table may not exist yet — skip migration silently
+    }
+    localStorage.setItem(SYNC_FLAG, 'true')
+  }
+
+  // Load a week's tasks from Supabase and merge into local state.
+  // Days that have Supabase rows replace their sections; days with no rows keep localStorage.
+  async function loadWeekTasksFromSupabase(monday) {
+    if (!user?.id) return
+    try {
+      const weekEnd = addDays(monday, 6)
+      const { data: rows, error } = await supabase
+        .from('schedule_day_tasks')
+        .select('*')
+        .eq('user_id', user.id)
+        .gte('task_date', monday)
+        .lte('task_date', weekEnd)
+        .order('position')
+      if (error) return  // table doesn't exist yet
+      if (!rows?.length) return
+      const byDate = {}
+      for (const row of rows) {
+        if (!byDate[row.task_date]) byDate[row.task_date] = { morning: [], work: [], afternoon: [], nightly: [], todo: [] }
+        const sec = byDate[row.task_date][row.section_id]
+        if (Array.isArray(sec)) sec.push(rowToTask(row))
+      }
+      setDataRaw(prev => {
+        const days = { ...prev.days }
+        for (const [d, secData] of Object.entries(byDate)) {
+          days[d] = { ...(days[d] || {}), ...secData }
+        }
+        const next = { ...prev, days }
+        localStorage.setItem(STORE, JSON.stringify(next))
+        return next
+      })
+    } catch {}
+  }
+
+  // Real-time: apply changes from other devices immediately
+  useEffect(() => {
+    if (!user?.id) return
+    const channel = supabase
+      .channel(`sdt_${user.id}`)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'schedule_day_tasks',
+        filter: `user_id=eq.${user.id}`,
+      }, ({ eventType, new: nr, old: or }) => {
+        if (eventType === 'INSERT') {
+          setDataRaw(prev => {
+            const d = nr.task_date, secId = nr.section_id
+            if ((prev.days[d]?.[secId] || []).some(t => t.id === nr.id)) return prev
+            const days = ensureDay(prev.days, d)
+            const next = {
+              ...prev, days: {
+                ...days,
+                [d]: { ...days[d], [secId]: [...(days[d][secId] || []), rowToTask(nr)] }
+              }
+            }
+            localStorage.setItem(STORE, JSON.stringify(next)); return next
+          })
+        } else if (eventType === 'UPDATE') {
+          setDataRaw(prev => {
+            const d = nr.task_date, secId = nr.section_id
+            if (!prev.days[d]) return prev
+            const next = {
+              ...prev, days: {
+                ...prev.days,
+                [d]: { ...prev.days[d], [secId]: (prev.days[d][secId] || []).map(t => t.id === nr.id ? rowToTask(nr) : t) }
+              }
+            }
+            localStorage.setItem(STORE, JSON.stringify(next)); return next
+          })
+        } else if (eventType === 'DELETE') {
+          setDataRaw(prev => {
+            const d = or.task_date, secId = or.section_id
+            if (!prev.days[d]) return prev
+            const next = {
+              ...prev, days: {
+                ...prev.days,
+                [d]: { ...prev.days[d], [secId]: (prev.days[d][secId] || []).filter(t => t.id !== or.id) }
+              }
+            }
+            localStorage.setItem(STORE, JSON.stringify(next)); return next
+          })
+        }
+      })
+      .subscribe()
+    return () => supabase.removeChannel(channel)
+  }, [user?.id])
 
   // Load today's focus tasks + task-list backlog + daily routine from To-Do
   useEffect(() => {
@@ -199,6 +336,8 @@ export default function Schedule() {
       .select('id, title, position').eq('user_id', user.id).eq('active', true)
       .order('position').order('created_at')
       .then(({ data: d }) => setTodoRoutines(d || []))
+    // Migrate localStorage → Supabase on first run, then load current week
+    ensureSupabaseSync().then(() => loadWeekTasksFromSupabase(getWeekMonday(TODAY)))
   }, [user?.id])
 
   function setRoutineAssign(upd) {
@@ -259,6 +398,7 @@ export default function Schedule() {
 
   useEffect(() => { reconcileFromTodo() }, [reconcileFromTodo])
   useEffect(() => { reconcileRoutine(viewDate) }, [viewDate, reconcileRoutine])
+  useEffect(() => { if (user?.id) loadWeekTasksFromSupabase(weekBase) }, [weekBase, user?.id])
   useEffect(() => {
     const h = () => { reconcileFromTodo(); reconcileRoutine(viewDate) }
     window.addEventListener('todos-changed', h)
@@ -338,8 +478,9 @@ export default function Schedule() {
   function addTask(d, secId) {
     const title = addDraft.title.trim()
     if (!title) return
+    const newId = crypto.randomUUID()
     const task = {
-      id: mkId(), title,
+      id: newId, title,
       time: addDraft.time.trim() || null,
       tag:  addDraft.tag  || null,
       completed: false, source: 'manual'
@@ -347,6 +488,11 @@ export default function Schedule() {
     mutDay(d, day => ({ ...day, [secId]: [...(day[secId] || []), task] }))
     setAddDraft({ title: '', time: '', tag: '' })
     setAddingIn(null)
+    supabase.from('schedule_day_tasks').insert({
+      id: newId, user_id: user.id, task_date: d, section_id: secId,
+      title, time_slot: task.time, tag: task.tag, completed: false,
+      position: getSection(d, secId).length, source_type: 'manual',
+    }).then(({ error }) => { if (error) console.warn('Schedule sync:', error.message) })
   }
 
   function toggleTask(d, secId, taskId) {
@@ -357,6 +503,10 @@ export default function Schedule() {
       ...day,
       [secId]: (day[secId] || []).map(t => t.id === taskId ? { ...t, completed } : t)
     }))
+    supabase.from('schedule_day_tasks')
+      .update({ completed, completed_at: completed ? new Date().toISOString() : null })
+      .eq('id', taskId).eq('user_id', user.id)
+      .then(({ error }) => { if (error) console.warn('Schedule sync:', error.message) })
     // Mirror to the linked To-Do record so it checks off in both places
     if (cur.sourceId && cur.sourceType) {
       const req = cur.sourceType === 'focus'
@@ -371,6 +521,9 @@ export default function Schedule() {
       ...day,
       [secId]: (day[secId] || []).filter(t => t.id !== taskId)
     }))
+    supabase.from('schedule_day_tasks').delete()
+      .eq('id', taskId).eq('user_id', user.id)
+      .then(({ error }) => { if (error) console.warn('Schedule sync:', error.message) })
   }
 
   function updateTaskTitle(d, secId, taskId, title) {
@@ -378,6 +531,9 @@ export default function Schedule() {
       ...day,
       [secId]: (day[secId] || []).map(t => t.id === taskId ? { ...t, title } : t)
     }))
+    supabase.from('schedule_day_tasks').update({ title })
+      .eq('id', taskId).eq('user_id', user.id)
+      .then(({ error }) => { if (error) console.warn('Schedule sync:', error.message) })
   }
 
   function updateSectionTime(key, val) {
@@ -397,15 +553,23 @@ export default function Schedule() {
 
   function importFocusTasks(d, secId) {
     const existing = getSection(d, secId).map(t => t.sourceId)
+    const basePos = getSection(d, secId).length
     const toAdd = focusTasks
       .filter(ft => !existing.includes(ft.id))
-      .map(ft => ({
-        id: mkId(), title: ft.title, time: null,
+      .map((ft, i) => ({
+        id: crypto.randomUUID(), title: ft.title, time: null,
         tag: 'todo', completed: false,
         source: 'todo-import', sourceId: ft.id, sourceType: 'focus'
       }))
     if (!toAdd.length) return
     mutDay(d, day => ({ ...day, [secId]: [...(day[secId] || []), ...toAdd] }))
+    supabase.from('schedule_day_tasks').insert(
+      toAdd.map((t, i) => ({
+        id: t.id, user_id: user.id, task_date: d, section_id: secId,
+        title: t.title, completed: false, position: basePos + i,
+        source_type: 'todo-import', source_id: t.sourceId, linked_type: 'focus', tag: 'todo',
+      }))
+    ).then(({ error }) => { if (error) console.warn('Schedule sync:', error.message) })
   }
 
   // Focus new-goal input when row opens
@@ -530,18 +694,25 @@ export default function Schedule() {
 
   function dropTaskOnDay(d, secId) {
     if (!dragTask) return
-    // Avoid duplicates
     const existing = (data.days[d]?.[secId] || []).map(t => t.sourceId)
     if (existing.includes(dragTask.id)) { setDragTask(null); setDragOverTarget(null); return }
+    const newId = crypto.randomUUID()
+    const linkedType = dragTask._src === 'task' ? 'task' : 'focus'
     const newTask = {
-      id: mkId(), title: dragTask.title,
+      id: newId, title: dragTask.title,
       time: null, tag: 'todo',
       completed: false, source: 'week-plan', sourceId: dragTask.id,
-      sourceType: dragTask._src === 'task' ? 'task' : 'focus',
+      sourceType: linkedType,
     }
     mutDay(d, day => ({ ...day, [secId]: [...(day[secId] || []), newTask] }))
     setDragTask(null)
     setDragOverTarget(null)
+    supabase.from('schedule_day_tasks').insert({
+      id: newId, user_id: user.id, task_date: d, section_id: secId,
+      title: newTask.title, completed: false,
+      position: getSection(d, secId).length,
+      source_type: 'week-plan', source_id: dragTask.id, linked_type: linkedType, tag: 'todo',
+    }).then(({ error }) => { if (error) console.warn('Schedule sync:', error.message) })
   }
 
   // ── Day tab drag & drop ────────────────────────────────────
@@ -553,12 +724,20 @@ export default function Schedule() {
     if (dd.kind === 'todo') {
       const existing = (data.days[viewDate]?.[secId] || []).map(t => t.sourceId)
       if (dd.task.sourceId && existing.includes(dd.task.sourceId)) return
+      const newId = crypto.randomUUID()
+      const linkedType = dd.task._src === 'task' ? 'task' : 'focus'
       const newTask = {
-        id: mkId(), title: dd.task.title, time: null, tag: 'todo',
+        id: newId, title: dd.task.title, time: null, tag: 'todo',
         completed: false, source: 'todo-drop', sourceId: dd.task.id,
-        sourceType: dd.task._src === 'task' ? 'task' : 'focus',
+        sourceType: linkedType,
       }
       mutDay(viewDate, day => ({ ...day, [secId]: [...(day[secId] || []), newTask] }))
+      supabase.from('schedule_day_tasks').insert({
+        id: newId, user_id: user.id, task_date: viewDate, section_id: secId,
+        title: newTask.title, completed: false,
+        position: getSection(viewDate, secId).length,
+        source_type: 'todo-drop', source_id: dd.task.id, linked_type: linkedType, tag: 'todo',
+      }).then(({ error }) => { if (error) console.warn('Schedule sync:', error.message) })
     } else if (dd.kind === 'task' && dd.fromSec !== secId) {
       mutDay(viewDate, day => {
         const moving = (day[dd.fromSec] || []).find(t => t.id === dd.task.id)
@@ -569,6 +748,9 @@ export default function Schedule() {
           [secId]:      [...(day[secId] || []), moving],
         }
       })
+      supabase.from('schedule_day_tasks').update({ section_id: secId })
+        .eq('id', dd.task.id).eq('user_id', user.id)
+        .then(({ error }) => { if (error) console.warn('Schedule sync:', error.message) })
     }
   }
 
@@ -670,7 +852,7 @@ export default function Schedule() {
 
         {/* Sub-tab bar */}
         <div className="tab-bar" style={{ marginBottom: 0 }}>
-          {['overview', 'day', 'week', 'routine'].map(t => (
+          {['overview', 'day', 'week', 'routine', 'progress'].map(t => (
             <button key={t}
               className={`tab-btn${subTab === t ? ' active' : ''}`}
               onClick={() => setSubTab(t)}
@@ -1708,6 +1890,106 @@ export default function Schedule() {
               )
             })}
           </div>
+          )
+        })()}
+
+        {/* ══════════════════════════════════════════════
+            PROGRESS TAB — today's full checklist
+        ══════════════════════════════════════════════ */}
+        {subTab === 'progress' && (() => {
+          const daySecs        = getSections(TODAY)
+          const routineForSec  = secId => todoRoutines.filter(rt => routineAssign[rt.id] === secId)
+          const routineChecks  = data.days[TODAY]?.routineChecks || {}
+          const routineAllDay  = daySecs.flatMap(s => routineForSec(s.id))
+          const routineDoneDay = routineAllDay.filter(rt => routineChecks[rt.id]).length
+          const allDayTasks    = getAllTasks(data.days[TODAY])
+          const viewDow        = new Date(TODAY + 'T12:00:00').getDay()
+          const workoutForDay  = weeklyPlan[viewDow] || { day_name: 'Rest', exercises: [] }
+          const workoutPlanned = workoutForDay.day_name && workoutForDay.day_name !== 'Rest'
+          const workoutLogged  = !!workoutDates[TODAY]
+          const workoutTotal   = workoutPlanned ? 1 : 0
+          const workoutDoneN   = (workoutPlanned && workoutLogged) ? 1 : 0
+          const allDone        = allDayTasks.filter(t => t.completed).length + routineDoneDay + workoutDoneN
+          const allTotal       = allDayTasks.length + routineAllDay.length + workoutTotal
+          const dayPct         = allTotal > 0 ? Math.round(allDone / allTotal * 100) : 0
+
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+              {/* Header card with big progress bar */}
+              <div className="card" style={{ padding: '20px 20px 18px' }}>
+                <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--text-muted)', marginBottom: 4 }}>Today</div>
+                <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 16 }}>{fmtFull(TODAY)}</div>
+                {allTotal > 0 ? (
+                  <>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+                      <span style={{ fontSize: 13, color: 'var(--text-light)' }}>{allDone} of {allTotal} complete</span>
+                      <span style={{ fontSize: 28, fontFamily: 'var(--mono)', fontWeight: 800, letterSpacing: '-0.04em', color: dayPct === 100 ? 'var(--success)' : 'var(--accent)' }}>{dayPct}%</span>
+                    </div>
+                    <div style={{ height: 6, borderRadius: 99, background: 'var(--border)', overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${dayPct}%`, background: dayPct === 100 ? 'var(--success)' : 'var(--accent)', borderRadius: 99, transition: 'width .5s ease' }} />
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>No tasks scheduled yet — head to the Day tab to add some.</div>
+                )}
+              </div>
+
+              {/* One card per section (only those with tasks) */}
+              {daySecs.map(sec => {
+                const tasks     = getSection(TODAY, sec.id)
+                const secRoutine = routineForSec(sec.id)
+                if (tasks.length === 0 && secRoutine.length === 0) return null
+                const secDone  = tasks.filter(t => t.completed).length + secRoutine.filter(rt => routineChecks[rt.id]).length
+                const secTotal = tasks.length + secRoutine.length
+                return (
+                  <div key={sec.id} className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderBottom: '1px solid var(--border)' }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700 }}>{sec.label}</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>{data.times[sec.timeKey] || DEFAULT_TIMES[sec.timeKey]}</div>
+                      </div>
+                      <span style={{ fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 600, color: secDone === secTotal ? 'var(--success)' : 'var(--text-light)' }}>
+                        {secDone}/{secTotal}
+                      </span>
+                    </div>
+                    {secRoutine.map(rt => (
+                      <RoutineRow key={rt.id} task={rt} isDark={isDark}
+                        checked={!!routineChecks[rt.id]}
+                        onToggle={() => toggleRoutineCheck(TODAY, rt.id)} />
+                    ))}
+                    {tasks.map(task => (
+                      <DayTaskRow key={task.id} task={task} isDark={isDark}
+                        dragging={false} onDragStart={null} onDragEnd={null}
+                        onToggle={() => toggleTask(TODAY, sec.id, task.id)}
+                        onDelete={() => deleteTask(TODAY, sec.id, task.id)} />
+                    ))}
+                  </div>
+                )
+              })}
+
+              {/* Workout status */}
+              {workoutPlanned && (
+                <div className="card" style={{ padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="#6366f1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                    <path d="M6.5 6.5h11M6.5 17.5h11M3 10h18M3 14h18"/>
+                  </svg>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: '#6366f1', flex: 1 }}>{workoutForDay.day_name}</span>
+                  {workoutLogged
+                    ? <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 99, background: 'rgba(107,227,164,0.15)', color: '#6BE3A4' }}>Logged</span>
+                    : <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Not logged yet</span>
+                  }
+                </div>
+              )}
+
+              {/* Quick link to Day tab if empty */}
+              {allTotal === 0 && (
+                <button className="btn btn-ghost" style={{ fontSize: 13 }}
+                  onClick={() => { setViewDate(TODAY); setSubTab('day') }}>
+                  Go to Day view
+                </button>
+              )}
+            </div>
           )
         })()}
 
