@@ -101,16 +101,11 @@ function TaskRing({ done, total, size = 136 }) {
         gap: 2,
       }}>
         <div style={{ fontSize: SIZE < 120 ? 22 : 30, fontWeight: 800, fontFamily: 'var(--mono)', lineHeight: 1, letterSpacing: '-0.03em', color }}>
-          {done}
+          {pct}%
         </div>
         <div style={{ fontSize: SIZE < 120 ? 9 : 11, color: 'var(--text-muted)' }}>
-          of {total}
+          {done}/{total}
         </div>
-        {SIZE >= 120 && (
-          <div style={{ marginTop: 4, fontSize: 10, fontWeight: 700, color, fontFamily: 'var(--mono)' }}>
-            {pct}%
-          </div>
-        )}
       </div>
     </div>
   )
