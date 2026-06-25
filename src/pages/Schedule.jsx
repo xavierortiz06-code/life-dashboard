@@ -166,6 +166,7 @@ export default function Schedule() {
   const [pickerLoading,    setPickerLoading]    = useState(false)
   const [addingGoal,       setAddingGoal]       = useState(false)
   const [newGoalText,      setNewGoalText]      = useState('')
+  const [weekGoalsOpen,    setWeekGoalsOpen]    = useState(true)
   const [planPanelOpen,    setPlanPanelOpen]    = useState(false)
   const [planTasks,        setPlanTasks]        = useState([])
   const [planLoading,      setPlanLoading]      = useState(false)
@@ -1495,90 +1496,104 @@ export default function Schedule() {
               const alreadyAdded = new Set(weekGoals.map(g => g.sourceId).filter(Boolean))
 
               return (
-                <div className="card">
-                  {/* Header */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: weekGoals.length ? 10 : 0 }}>
-                    <div style={sLabel}>Weekly Goals</div>
+                <div className="card" style={{ padding: '12px 14px' }}>
+                  {/* Header — matches Day to-do tray style */}
+                  <button
+                    onClick={() => setWeekGoalsOpen(o => !o)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text)', fontFamily: 'inherit', padding: 0 }}
+                  >
+                    <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="#6366f1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                      <polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+                    </svg>
+                    <span style={{ fontSize: 13, fontWeight: 700, flex: 1, textAlign: 'left' }}>Weekly Goals</span>
                     {weekGoals.length > 0 && (
-                      <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: goalsDone === weekGoals.length ? 'var(--success)' : 'var(--text-light)', marginLeft: 4 }}>
+                      <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: goalsDone === weekGoals.length ? 'var(--success)' : 'var(--text-muted)', marginRight: 4 }}>
                         {goalsDone}/{weekGoals.length}
                       </span>
                     )}
-                    <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-                      <button
-                        className="btn btn-ghost btn-sm"
-                        onClick={openPicker}
-                        style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 5 }}
-                      >
-                        <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="8 17 12 21 16 17"/><line x1="12" y1="3" x2="12" y2="21"/>
-                        </svg>
-                        Import from To-Do
-                      </button>
-                      <button
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => { setAddingGoal(true); setPickerOpen(false) }}
-                        style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 5 }}
-                      >
-                        <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-                        </svg>
-                        Add goal
-                      </button>
-                    </div>
-                  </div>
+                    <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+                      style={{ color: 'var(--text-muted)', transition: 'transform .2s', transform: weekGoalsOpen ? 'rotate(0)' : 'rotate(-90deg)', flexShrink: 0 }}>
+                      <polyline points="6 9 12 15 18 9"/>
+                    </svg>
+                  </button>
 
-                  {/* Goal rows */}
-                  {weekGoals.map(goal => (
-                    <GoalRow
-                      key={goal.id}
-                      goal={goal}
-                      isDark={isDark}
-                      onToggle={() => toggleWeeklyGoal(weekBase, goal.id)}
-                      onDelete={() => deleteWeeklyGoal(weekBase, goal.id)}
-                    />
-                  ))}
+                  {weekGoalsOpen && (
+                    <div style={{ marginTop: 10 }}>
+                      {/* Action buttons */}
+                      <div style={{ display: 'flex', gap: 6, marginBottom: weekGoals.length ? 10 : 0 }}>
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          onClick={openPicker}
+                          style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 5 }}
+                        >
+                          <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="8 17 12 21 16 17"/><line x1="12" y1="3" x2="12" y2="21"/>
+                          </svg>
+                          Import from To-Do
+                        </button>
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => { setAddingGoal(true); setPickerOpen(false) }}
+                          style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 5 }}
+                        >
+                          <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                          </svg>
+                          Add goal
+                        </button>
+                      </div>
 
-                  {/* Empty state */}
-                  {weekGoals.length === 0 && !addingGoal && !pickerOpen && (
-                    <div style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic', marginTop: 8 }}>
-                      No goals set — import from To-Do or add one manually.
-                    </div>
-                  )}
+                      {/* Goal rows */}
+                      {weekGoals.map(goal => (
+                        <GoalRow
+                          key={goal.id}
+                          goal={goal}
+                          isDark={isDark}
+                          onToggle={() => toggleWeeklyGoal(weekBase, goal.id)}
+                          onDelete={() => deleteWeeklyGoal(weekBase, goal.id)}
+                        />
+                      ))}
 
-                  {/* Manual add row */}
-                  {addingGoal && (
-                    <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
-                      <input
-                        ref={newGoalRef}
-                        value={newGoalText}
-                        onChange={e => setNewGoalText(e.target.value)}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') { addWeeklyGoal(weekBase, newGoalText); setNewGoalText(''); setAddingGoal(false) }
-                          if (e.key === 'Escape') { setAddingGoal(false); setNewGoalText('') }
-                        }}
-                        placeholder="Goal for this week…"
-                        style={{ flex: 1, fontSize: 13 }}
-                      />
-                      <button
-                        className="btn btn-primary btn-sm"
-                        disabled={!newGoalText.trim()}
-                        onClick={() => { addWeeklyGoal(weekBase, newGoalText); setNewGoalText(''); setAddingGoal(false) }}
-                      >Add</button>
-                      <button
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => { setAddingGoal(false); setNewGoalText('') }}
-                        style={{ display: 'flex', alignItems: 'center' }}
-                      >
-                        <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-                        </svg>
-                      </button>
-                    </div>
-                  )}
+                      {/* Empty state */}
+                      {weekGoals.length === 0 && !addingGoal && !pickerOpen && (
+                        <div style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                          No goals set — import from To-Do or add one manually.
+                        </div>
+                      )}
 
-                  {/* To-Do picker */}
-                  {pickerOpen && (
+                      {/* Manual add row */}
+                      {addingGoal && (
+                        <div style={{ display: 'flex', gap: 6, marginTop: weekGoals.length ? 8 : 0 }}>
+                          <input
+                            ref={newGoalRef}
+                            value={newGoalText}
+                            onChange={e => setNewGoalText(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') { addWeeklyGoal(weekBase, newGoalText); setNewGoalText(''); setAddingGoal(false) }
+                              if (e.key === 'Escape') { setAddingGoal(false); setNewGoalText('') }
+                            }}
+                            placeholder="Goal for this week…"
+                            style={{ flex: 1, fontSize: 13 }}
+                          />
+                          <button
+                            className="btn btn-primary btn-sm"
+                            disabled={!newGoalText.trim()}
+                            onClick={() => { addWeeklyGoal(weekBase, newGoalText); setNewGoalText(''); setAddingGoal(false) }}
+                          >Add</button>
+                          <button
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => { setAddingGoal(false); setNewGoalText('') }}
+                            style={{ display: 'flex', alignItems: 'center' }}
+                          >
+                            <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                            </svg>
+                          </button>
+                        </div>
+                      )}
+
+                      {/* To-Do picker */}
+                      {pickerOpen && (
                     <div style={{
                       marginTop: 12,
                       border: '1px solid var(--border)',
@@ -1652,6 +1667,8 @@ export default function Schedule() {
                           })}
                         </div>
                       )}
+                    </div>
+                  )}
                     </div>
                   )}
                 </div>
