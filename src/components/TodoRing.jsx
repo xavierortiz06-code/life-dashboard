@@ -54,7 +54,14 @@ export default function TodoRing() {
   useEffect(() => {
     if (!user?.id) return
     load()
-    window.addEventListener('todos-changed', load)
+    const handleTodosChanged = (e) => {
+      if (e?.detail?.doneDelta !== undefined) {
+        setDone(prev => Math.max(0, prev + e.detail.doneDelta))
+      } else {
+        load()
+      }
+    }
+    window.addEventListener('todos-changed', handleTodosChanged)
 
     const channel = supabase
       .channel(`ring_${user.id}`)
@@ -64,7 +71,7 @@ export default function TodoRing() {
       .subscribe()
 
     return () => {
-      window.removeEventListener('todos-changed', load)
+      window.removeEventListener('todos-changed', handleTodosChanged)
       supabase.removeChannel(channel)
     }
   }, [load, user?.id])

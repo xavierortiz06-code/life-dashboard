@@ -376,7 +376,7 @@ export default function Schedule() {
   }
 
   // Tell the rest of the app (To-Do counters, etc.) that completion state changed
-  function notifyTodos() { window.dispatchEvent(new CustomEvent('todos-changed')) }
+  function notifyTodos(detail) { window.dispatchEvent(new CustomEvent('todos-changed', { detail: detail || null })) }
 
   // ── Two-way sync with To-Do ────────────────────────────────
   // Schedule keeps local copies of imported/dropped tasks; reconcile their
@@ -530,11 +530,11 @@ export default function Schedule() {
       ...day,
       [secId]: (day[secId] || []).map(t => t.id === taskId ? { ...t, completed } : t)
     }))
+    notifyTodos({ doneDelta: completed ? 1 : -1 })
     supabase.from('schedule_day_tasks')
       .update({ completed, completed_at: completed ? new Date().toISOString() : null })
       .eq('id', taskId).eq('user_id', user.id)
       .then(({ error }) => { if (error) console.warn('Schedule sync:', error.message) })
-    // Mirror to the linked To-Do record so it checks off in both places
     if (cur.sourceId && cur.sourceType) {
       const req = cur.sourceType === 'focus'
         ? supabase.from('focus_tasks').update({ completed }).eq('id', cur.sourceId)
@@ -664,7 +664,7 @@ export default function Schedule() {
       ...day,
       routineChecks: { ...(day.routineChecks || {}), [routineId]: checked }
     }))
-    // Mirror to To-Do's routine_completions so the routine checks off in both places
+    notifyTodos({ doneDelta: checked ? 1 : -1 })
     const req = checked
       ? supabase.from('routine_completions').insert({ user_id: user.id, routine_task_id: routineId, completed_date: d })
       : supabase.from('routine_completions').delete().eq('routine_task_id', routineId).eq('completed_date', d)
