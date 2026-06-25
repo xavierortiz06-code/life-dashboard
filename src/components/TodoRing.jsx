@@ -34,20 +34,20 @@ export default function TodoRing() {
     const [
       { data: rTasks },
       { data: rComp  },
-      { data: fTasks },
+      { data: sdtData },
     ] = await Promise.all([
       supabase.from('routine_tasks').select('id').eq('user_id', user.id).eq('active', true),
       supabase.from('routine_completions').select('id').eq('user_id', user.id).eq('completed_date', today),
-      supabase.from('focus_tasks').select('id,completed').eq('user_id', user.id).eq('focus_date', today),
+      supabase.from('schedule_day_tasks').select('id,completed').eq('user_id', user.id).eq('task_date', today),
     ])
 
-    const rTotal  = (rTasks || []).length
-    const rDone   = (rComp  || []).length
-    const fTotal  = (fTasks || []).length
-    const fDone   = (fTasks || []).filter(t => t.completed).length
+    const rTotal   = (rTasks  || []).length
+    const rDone    = (rComp   || []).length
+    const sdtTotal = (sdtData || []).length
+    const sdtDone  = (sdtData || []).filter(t => t.completed).length
 
-    setTotal(rTotal + fTotal)
-    setDone(rDone  + fDone)
+    setTotal(rTotal + sdtTotal)
+    setDone(rDone  + sdtDone)
   }, [user?.id])
 
   useEffect(() => {

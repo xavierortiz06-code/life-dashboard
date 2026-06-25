@@ -867,7 +867,7 @@ export default function Schedule() {
 
         {/* Sub-tab bar */}
         <div className="tab-bar" style={{ marginBottom: 0 }}>
-          {['overview', 'day', 'week', 'routine', 'progress'].map(t => (
+          {['overview', 'day', 'week', 'routine'].map(t => (
             <button key={t}
               className={`tab-btn${subTab === t ? ' active' : ''}`}
               onClick={() => setSubTab(t)}
@@ -1908,105 +1908,6 @@ export default function Schedule() {
           )
         })()}
 
-        {/* ══════════════════════════════════════════════
-            PROGRESS TAB — today's full checklist
-        ══════════════════════════════════════════════ */}
-        {subTab === 'progress' && (() => {
-          const daySecs        = getSections(TODAY)
-          const routineForSec  = secId => todoRoutines.filter(rt => routineAssign[rt.id] === secId)
-          const routineChecks  = data.days[TODAY]?.routineChecks || {}
-          const routineAllDay  = daySecs.flatMap(s => routineForSec(s.id))
-          const routineDoneDay = routineAllDay.filter(rt => routineChecks[rt.id]).length
-          const allDayTasks    = getAllTasks(data.days[TODAY])
-          const viewDow        = new Date(TODAY + 'T12:00:00').getDay()
-          const workoutForDay  = weeklyPlan[viewDow] || { day_name: 'Rest', exercises: [] }
-          const workoutPlanned = workoutForDay.day_name && workoutForDay.day_name !== 'Rest'
-          const workoutLogged  = !!workoutDates[TODAY]
-          const workoutTotal   = workoutPlanned ? 1 : 0
-          const workoutDoneN   = (workoutPlanned && workoutLogged) ? 1 : 0
-          const allDone        = allDayTasks.filter(t => t.completed).length + routineDoneDay + workoutDoneN
-          const allTotal       = allDayTasks.length + routineAllDay.length + workoutTotal
-          const dayPct         = allTotal > 0 ? Math.round(allDone / allTotal * 100) : 0
-
-          return (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-
-              {/* Header card with big progress bar */}
-              <div className="card" style={{ padding: '20px 20px 18px' }}>
-                <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--text-muted)', marginBottom: 4 }}>Today</div>
-                <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 16 }}>{fmtFull(TODAY)}</div>
-                {allTotal > 0 ? (
-                  <>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
-                      <span style={{ fontSize: 13, color: 'var(--text-light)' }}>{allDone} of {allTotal} complete</span>
-                      <span style={{ fontSize: 28, fontFamily: 'var(--mono)', fontWeight: 800, letterSpacing: '-0.04em', color: dayPct === 100 ? 'var(--success)' : 'var(--accent)' }}>{dayPct}%</span>
-                    </div>
-                    <div style={{ height: 6, borderRadius: 99, background: 'var(--border)', overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: `${dayPct}%`, background: dayPct === 100 ? 'var(--success)' : 'var(--accent)', borderRadius: 99, transition: 'width .5s ease' }} />
-                    </div>
-                  </>
-                ) : (
-                  <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>No tasks scheduled yet — head to the Day tab to add some.</div>
-                )}
-              </div>
-
-              {/* One card per section (only those with tasks) */}
-              {daySecs.map(sec => {
-                const tasks     = getSection(TODAY, sec.id)
-                const secRoutine = routineForSec(sec.id)
-                if (tasks.length === 0 && secRoutine.length === 0) return null
-                const secDone  = tasks.filter(t => t.completed).length + secRoutine.filter(rt => routineChecks[rt.id]).length
-                const secTotal = tasks.length + secRoutine.length
-                return (
-                  <div key={sec.id} className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderBottom: '1px solid var(--border)' }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 13, fontWeight: 700 }}>{sec.label}</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>{data.times[sec.timeKey] || DEFAULT_TIMES[sec.timeKey]}</div>
-                      </div>
-                      <span style={{ fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 600, color: secDone === secTotal ? 'var(--success)' : 'var(--text-light)' }}>
-                        {secDone}/{secTotal}
-                      </span>
-                    </div>
-                    {secRoutine.map(rt => (
-                      <RoutineRow key={rt.id} task={rt} isDark={isDark}
-                        checked={!!routineChecks[rt.id]}
-                        onToggle={() => toggleRoutineCheck(TODAY, rt.id)} />
-                    ))}
-                    {tasks.map(task => (
-                      <DayTaskRow key={task.id} task={task} isDark={isDark}
-                        dragging={false} onDragStart={null} onDragEnd={null}
-                        onToggle={() => toggleTask(TODAY, sec.id, task.id)}
-                        onDelete={() => deleteTask(TODAY, sec.id, task.id)} />
-                    ))}
-                  </div>
-                )
-              })}
-
-              {/* Workout status */}
-              {workoutPlanned && (
-                <div className="card" style={{ padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="#6366f1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                    <path d="M6.5 6.5h11M6.5 17.5h11M3 10h18M3 14h18"/>
-                  </svg>
-                  <span style={{ fontSize: 14, fontWeight: 700, color: '#6366f1', flex: 1 }}>{workoutForDay.day_name}</span>
-                  {workoutLogged
-                    ? <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 99, background: 'rgba(107,227,164,0.15)', color: '#6BE3A4' }}>Logged</span>
-                    : <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Not logged yet</span>
-                  }
-                </div>
-              )}
-
-              {/* Quick link to Day tab if empty */}
-              {allTotal === 0 && (
-                <button className="btn btn-ghost" style={{ fontSize: 13 }}
-                  onClick={() => { setViewDate(TODAY); setSubTab('day') }}>
-                  Go to Day view
-                </button>
-              )}
-            </div>
-          )
-        })()}
 
       </div>
 

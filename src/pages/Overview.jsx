@@ -217,6 +217,7 @@ export default function Overview() {
   const [nut,  setNut]   = useState({ cal: 0, prot: 0, carbs: 0, fat: 0 })
   const [waterMl, setWaterMl]   = useState(0)
   const [tasks,   setTasks]     = useState([])
+  const [sdtData, setSdtData]   = useState([])
   const [routineDone,  setRoutineDone]  = useState(0)
   const [routineTotal, setRoutineTotal] = useState(0)
   const [balance, setBalance]   = useState(0)
@@ -237,14 +238,14 @@ export default function Overview() {
     async function load() {
       const cutoff = new Date(Date.now() - 70 * 86400000).toISOString().split('T')[0]
       const [
-        { data: nutData }, { data: taskData }, { data: focusData },
-        { data: rtData },  { data: rcData },   { data: budData },
-        { data: setsData },{ data: dateData },  { data: splitData },
+        { data: nutData }, { data: focusData }, { data: sdtRes },
+        { data: rtData },  { data: rcData },    { data: budData },
+        { data: setsData },{ data: dateData },   { data: splitData },
       ] = await Promise.all([
         supabase.from('nutrition_entries').select('calories,protein,carbs,fat').eq('user_id', user.id).eq('date', TODAY),
-        supabase.from('task_list').select('id,title,completed,priority').eq('user_id', user.id),
-        supabase.from('focus_tasks').select('id,text,completed').eq('user_id', user.id).eq('date', TODAY),
-        supabase.from('routine_tasks').select('id').eq('user_id', user.id),
+        supabase.from('focus_tasks').select('id,text,completed,priority').eq('user_id', user.id).eq('focus_date', TODAY),
+        supabase.from('schedule_day_tasks').select('id,completed,section_id,title').eq('user_id', user.id).eq('task_date', TODAY),
+        supabase.from('routine_tasks').select('id').eq('user_id', user.id).eq('active', true),
         supabase.from('routine_completions').select('routine_task_id').eq('user_id', user.id).eq('completed_date', TODAY),
         supabase.from('budget_entries').select('*').eq('user_id', user.id).order('date', { ascending: false }).limit(4),
         supabase.from('workout_sets').select('*, exercises(name,muscle_group)').eq('user_id', user.id).eq('logged_date', TODAY),
@@ -254,7 +255,8 @@ export default function Overview() {
 
       if (nutData) setNut(nutData.reduce((a, e) => ({ cal: a.cal + (e.calories||0), prot: a.prot + (e.protein||0), carbs: a.carbs + (e.carbs||0), fat: a.fat + (e.fat||0) }), { cal:0, prot:0, carbs:0, fat:0 }))
       setWaterMl(parseInt(localStorage.getItem(`nutrition-water:${TODAY}`)) || 0)
-      setTasks([...(taskData||[]).map(t=>({...t,_src:'task'})), ...(focusData||[]).map(t=>({...t,title:t.text,_src:'focus'}))])
+      setTasks((focusData||[]).map(t=>({...t,title:t.text,_src:'focus'})))
+      setSdtData(sdtRes || [])
       setRoutineTotal((rtData||[]).length)
       setRoutineDone((rcData||[]).length)
       setBalance(parseFloat(localStorage.getItem('actual_balance')) || 0)
@@ -267,7 +269,6 @@ export default function Overview() {
         setSplitDay(splitData.find(d => d.day_name?.toLowerCase().includes(N[DOW].toLowerCase())) || null)
       }
       try { const a = JSON.parse(localStorage.getItem('music-activity')||'null'); setSessions(a?.sessions||[]) } catch { setSessions([]) }
-      try { const p = JSON.parse(localStorage.getItem('schedule-planner')||'{}'); setSchedule(p[TODAY]||{}) } catch { setSchedule({}) }
     }
     load()
   }, [user, loadTick])
@@ -277,8 +278,10 @@ export default function Overview() {
   const calPct     = goals.cal > 0 ? Math.round(nut.cal / goals.cal * 100) : 0
   const waterGoal  = parseInt(localStorage.getItem('water-goal-ml')) || 3000
   const wStreak    = computeDateStreak(new Set(wDates))
-  const done       = tasks.filter(t => t.completed).length
-  const total      = tasks.length
+  const sdtDone    = sdtData.filter(t => t.completed).length
+  const sdtTotal   = sdtData.length
+  const done       = sdtDone + routineDone
+  const total      = sdtTotal + routineTotal
   const high       = tasks.filter(t => !t.completed && t.priority === 'high')
   const exercises  = [...new Set(todaySets.map(s => s.exercises?.name).filter(Boolean))]
   const INST = [
@@ -306,8 +309,9 @@ export default function Overview() {
     setLoadTick(t => t + 1)
   }
 
-  const secTasks = (schedule[currentSectionId()] || []).filter(t => !t.completed)
-  const secDone  = (schedule[currentSectionId()] || []).filter(t => t.completed).length
+  const secId    = currentSectionId()
+  const secTasks = sdtData.filter(t => t.section_id === secId && !t.completed)
+  const secDone  = sdtData.filter(t => t.section_id === secId && t.completed).length
 
   // ── Mobile render ────────────────────────────────────────────────────
   if (isMobile) {
@@ -362,7 +366,7 @@ export default function Overview() {
                 </div>
               : <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                   {secTasks.slice(0, 4).map((t, i) => (
-                    <span key={t.id || i} style={{ fontSize: 12, padding: '4px 11px', borderRadius: 99, background: 'rgba(255,255,255,0.06)', color: 'var(--text-light)', border: '1px solid rgba(255,255,255,0.08)' }}>{t.text}</span>
+                    <span key={t.id || i} style={{ fontSize: 12, padding: '4px 11px', borderRadius: 99, background: 'rgba(255,255,255,0.06)', color: 'var(--text-light)', border: '1px solid rgba(255,255,255,0.08)' }}>{t.title}</span>
                   ))}
                   {secTasks.length > 4 && <span style={{ fontSize: 11, color: 'var(--text-muted)', alignSelf: 'center' }}>+{secTasks.length - 4}</span>}
                 </div>
@@ -568,7 +572,7 @@ export default function Overview() {
                       fontSize: 12, padding: '4px 11px', borderRadius: 99,
                       background: 'rgba(255,255,255,0.04)', color: 'var(--text-light)',
                       border: '1px solid rgba(255,255,255,0.08)',
-                    }}>{t.text}</span>
+                    }}>{t.title}</span>
                   ))}
                   {secTasks.length > 5 && <span style={{ fontSize: 11, color: 'var(--text-muted)', alignSelf: 'center' }}>+{secTasks.length - 5}</span>}
                 </div>
