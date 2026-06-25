@@ -52,10 +52,22 @@ export default function TodoRing() {
   }, [user?.id])
 
   useEffect(() => {
+    if (!user?.id) return
     load()
     window.addEventListener('todos-changed', load)
-    return () => window.removeEventListener('todos-changed', load)
-  }, [load])
+
+    const channel = supabase
+      .channel(`ring_${user.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'schedule_day_tasks',    filter: `user_id=eq.${user.id}` }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'routine_completions',   filter: `user_id=eq.${user.id}` }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'routine_tasks',         filter: `user_id=eq.${user.id}` }, load)
+      .subscribe()
+
+    return () => {
+      window.removeEventListener('todos-changed', load)
+      supabase.removeChannel(channel)
+    }
+  }, [load, user?.id])
 
   const pct    = total > 0 ? Math.round(done / total * 100) : 0
   const offset = CIRCUMFERENCE * (1 - pct / 100)
