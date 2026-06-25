@@ -220,6 +220,8 @@ export default function Overview() {
   const [sdtData, setSdtData]   = useState([])
   const [routineDone,  setRoutineDone]  = useState(0)
   const [routineTotal, setRoutineTotal] = useState(0)
+  const [routineData,  setRoutineData]  = useState([])   // { id, title, schedule_block }
+  const [routineCompletedIds, setRoutineCompletedIds] = useState(new Set())
   const [balance, setBalance]   = useState(0)
   const [recent,  setRecent]    = useState([])
   const [todaySets,  setTodaySets]  = useState([])
@@ -245,7 +247,7 @@ export default function Overview() {
         supabase.from('nutrition_entries').select('calories,protein,carbs,fat').eq('user_id', user.id).eq('date', TODAY),
         supabase.from('focus_tasks').select('id,text,completed,priority').eq('user_id', user.id).eq('focus_date', TODAY),
         supabase.from('schedule_day_tasks').select('id,completed,section_id,title').eq('user_id', user.id).eq('task_date', TODAY),
-        supabase.from('routine_tasks').select('id').eq('user_id', user.id).eq('active', true).not('schedule_block', 'is', null),
+        supabase.from('routine_tasks').select('id,title,schedule_block').eq('user_id', user.id).eq('active', true).not('schedule_block', 'is', null),
         supabase.from('routine_completions').select('routine_task_id').eq('user_id', user.id).eq('completed_date', TODAY),
         supabase.from('budget_entries').select('*').eq('user_id', user.id).order('date', { ascending: false }).limit(4),
         supabase.from('workout_sets').select('*, exercises(name,muscle_group)').eq('user_id', user.id).eq('logged_date', TODAY),
@@ -257,9 +259,13 @@ export default function Overview() {
       setWaterMl(parseInt(localStorage.getItem(`nutrition-water:${TODAY}`)) || 0)
       setTasks((focusData||[]).map(t=>({...t,title:t.text,_src:'focus'})))
       setSdtData(sdtRes || [])
-      const assignedIds = new Set((rtData||[]).map(t => t.id))
+      const rt = rtData || []
+      const assignedIds = new Set(rt.map(t => t.id))
+      const completedIds = new Set((rcData||[]).filter(c => assignedIds.has(c.routine_task_id)).map(c => c.routine_task_id))
+      setRoutineData(rt)
+      setRoutineCompletedIds(completedIds)
       setRoutineTotal(assignedIds.size)
-      setRoutineDone((rcData||[]).filter(c => assignedIds.has(c.routine_task_id)).length)
+      setRoutineDone(completedIds.size)
       setBalance(parseFloat(localStorage.getItem('actual_balance')) || 0)
       setRecent(budData || [])
       setTodaySets(setsData || [])
@@ -310,13 +316,32 @@ export default function Overview() {
     setLoadTick(t => t + 1)
   }
 
-  const secId       = currentSectionId()
-  const secAllTasks = sdtData.filter(t => t.section_id === secId)
-  const secTasks    = secAllTasks.filter(t => !t.completed)
-  const secDone     = secAllTasks.filter(t =>  t.completed).length
+  const secId = currentSectionId()
+  const secRoutines = routineData
+    .filter(r => r.schedule_block === secId)
+    .map(r => ({ id: r.id, title: r.title, completed: routineCompletedIds.has(r.id), _isRoutine: true }))
+  const secAllTasks = [
+    ...secRoutines,
+    ...sdtData.filter(t => t.section_id === secId),
+  ]
+  const secTasks = secAllTasks.filter(t => !t.completed)
+  const secDone  = secAllTasks.filter(t =>  t.completed).length
 
   function notifyTodos(detail) {
     window.dispatchEvent(new CustomEvent('todos-changed', { detail: detail || null }))
+  }
+
+  function toggleRoutine(routineId) {
+    const wasCompleted = routineCompletedIds.has(routineId)
+    const next = new Set(routineCompletedIds)
+    wasCompleted ? next.delete(routineId) : next.add(routineId)
+    setRoutineCompletedIds(next)
+    setRoutineDone(next.size)
+    notifyTodos({ doneDelta: wasCompleted ? -1 : 1 })
+    const req = wasCompleted
+      ? supabase.from('routine_completions').delete().eq('routine_task_id', routineId).eq('completed_date', TODAY)
+      : supabase.from('routine_completions').insert({ user_id: user.id, routine_task_id: routineId, completed_date: TODAY })
+    req.then(() => notifyTodos())
   }
 
   function toggleSdt(taskId) {
@@ -379,7 +404,7 @@ export default function Overview() {
             ? <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>Nothing scheduled for this block.</div>
             : <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                 {secAllTasks.map((t, i) => (
-                  <button key={t.id || i} onClick={() => toggleSdt(t.id)} style={{
+                  <button key={t.id || i} onClick={() => t._isRoutine ? toggleRoutine(t.id) : toggleSdt(t.id)} style={{
                     display: 'flex', alignItems: 'center', gap: 9,
                     background: 'none', border: 'none', cursor: 'pointer',
                     padding: '4px 2px', textAlign: 'left', width: '100%',
@@ -394,10 +419,11 @@ export default function Overview() {
                       {t.completed && <svg width={9} height={9} viewBox="0 0 12 12" fill="none" stroke="#000" strokeWidth="2.5" strokeLinecap="round"><polyline points="2 6 5 9 10 3"/></svg>}
                     </div>
                     <span style={{
-                      fontSize: 13, color: t.completed ? 'var(--text-muted)' : 'var(--text)',
+                      flex: 1, fontSize: 13, color: t.completed ? 'var(--text-muted)' : 'var(--text)',
                       textDecoration: t.completed ? 'line-through' : 'none',
                       transition: 'color .15s',
                     }}>{t.title}</span>
+                    {t._isRoutine && <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.08em', color: 'var(--accent)', flexShrink: 0 }}>ROUTINE</span>}
                   </button>
                 ))}
               </div>
@@ -594,7 +620,7 @@ export default function Overview() {
             ? <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 2 }}>Nothing scheduled for this block.</div>
             : <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 2 }}>
                 {secAllTasks.map((t, i) => (
-                  <button key={t.id || i} onClick={() => toggleSdt(t.id)} style={{
+                  <button key={t.id || i} onClick={() => t._isRoutine ? toggleRoutine(t.id) : toggleSdt(t.id)} style={{
                     display: 'flex', alignItems: 'center', gap: 8,
                     background: 'none', border: 'none', cursor: 'pointer',
                     padding: '3px 0', textAlign: 'left', width: '100%',
@@ -609,10 +635,11 @@ export default function Overview() {
                       {t.completed && <svg width={8} height={8} viewBox="0 0 12 12" fill="none" stroke="#000" strokeWidth="2.5" strokeLinecap="round"><polyline points="2 6 5 9 10 3"/></svg>}
                     </div>
                     <span style={{
-                      fontSize: 12, color: t.completed ? 'var(--text-muted)' : 'var(--text-light)',
+                      flex: 1, fontSize: 12, color: t.completed ? 'var(--text-muted)' : 'var(--text-light)',
                       textDecoration: t.completed ? 'line-through' : 'none',
                       transition: 'color .15s',
                     }}>{t.title}</span>
+                    {t._isRoutine && <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.08em', color: 'var(--accent)', flexShrink: 0 }}>ROUTINE</span>}
                   </button>
                 ))}
               </div>
