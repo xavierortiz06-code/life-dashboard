@@ -200,41 +200,56 @@ export default function Schedule() {
   }
 
   // ── Supabase cross-device sync ─────────────────────────────
-  // One-time migration: push existing localStorage tasks to Supabase so no
-  // data is lost when first enabling sync on the primary device.
+  // Migration: check if Supabase is empty for this user, and if so push
+  // whatever localStorage has. No flag needed — checking Supabase directly
+  // avoids the flag-stuck problem.
   async function ensureSupabaseSync() {
-    if (localStorage.getItem(SYNC_FLAG) || !user?.id) return
-    const stored = loadStore()
-    const rows = []
-    for (const [d, day] of Object.entries(stored.days || {})) {
-      for (const [secId, tasks] of Object.entries(day)) {
-        if (!Array.isArray(tasks)) continue
-        tasks.forEach((task, pos) => {
-          if (!task.title) return
-          rows.push({
-            id: crypto.randomUUID(),
-            user_id: user.id,
-            task_date: d,
-            section_id: secId,
-            title: task.title,
-            time_slot: task.time || null,
-            tag: task.tag || null,
-            completed: task.completed || false,
-            completed_at: task.completed ? new Date().toISOString() : null,
-            position: pos,
-            source_type: task.source || 'manual',
-            source_id: null,
-            linked_type: task.sourceType || null,
+    if (!user?.id) return
+    try {
+      // Check if Supabase already has data for this user
+      const { count, error: countErr } = await supabase
+        .from('schedule_day_tasks')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+      if (countErr) return  // table may not exist yet
+      if (count > 0) return  // already has data — skip migration
+
+      // Supabase empty: push from localStorage
+      const stored = loadStore()
+      const rows = []
+      for (const [d, day] of Object.entries(stored.days || {})) {
+        for (const [secId, tasks] of Object.entries(day)) {
+          if (!Array.isArray(tasks)) continue
+          tasks.forEach((task, pos) => {
+            if (!task.title) return
+            rows.push({
+              id: crypto.randomUUID(),
+              user_id: user.id,
+              task_date: d,
+              section_id: secId,
+              title: task.title,
+              time_slot: task.time || null,
+              tag: task.tag || null,
+              completed: task.completed || false,
+              completed_at: task.completed ? new Date().toISOString() : null,
+              position: pos,
+              source_type: task.source || 'manual',
+              source_id: null,
+              linked_type: task.sourceType || null,
+            })
           })
-        })
+        }
       }
+      if (!rows.length) return
+      const CHUNK = 50
+      for (let i = 0; i < rows.length; i += CHUNK) {
+        const { error } = await supabase.from('schedule_day_tasks').insert(rows.slice(i, i + CHUNK))
+        if (error) { console.warn('Schedule migration error:', error.message); return }
+      }
+      console.log(`Schedule: migrated ${rows.length} tasks to Supabase`)
+    } catch (e) {
+      console.warn('Schedule migration failed:', e.message)
     }
-    const CHUNK = 50
-    for (let i = 0; i < rows.length; i += CHUNK) {
-      const { error } = await supabase.from('schedule_day_tasks').insert(rows.slice(i, i + CHUNK))
-      if (error) return  // table may not exist yet — skip migration silently
-    }
-    localStorage.setItem(SYNC_FLAG, 'true')
   }
 
   // Load a week's tasks from Supabase and merge into local state.
