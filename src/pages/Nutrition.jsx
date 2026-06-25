@@ -179,6 +179,16 @@ export default function Nutrition() {
   const [panelOpen, setPanelOpen] = useState(false)
   const panelRef = useRef(null)
 
+  // MFP screenshot import
+  const [mfpOpen,    setMfpOpen]    = useState(false)
+  const [mfpImage,   setMfpImage]   = useState(null)   // { base64, mediaType, preview }
+  const [mfpParsing, setMfpParsing] = useState(false)
+  const [mfpItems,   setMfpItems]   = useState(null)   // null = not parsed yet
+  const [mfpSel,     setMfpSel]     = useState(new Set())
+  const [mfpLogging, setMfpLogging] = useState(false)
+  const [mfpError,   setMfpError]   = useState(null)
+  const mfpFileRef = useRef(null)
+
   // Camera / scanner mode ('search' | 'barcode' | 'photo')
   const [addMode, setAddMode] = useState('search')
 
@@ -475,6 +485,80 @@ export default function Nutrition() {
     setFoodTab('all'); setCustomFoodOpen(false); setQuickOpen(false)
   }
 
+  function handleMfpFile(file) {
+    if (!file) return
+    const mediaType = file.type || 'image/jpeg'
+    const reader = new FileReader()
+    reader.onload = e => {
+      const dataUrl = e.target.result
+      const base64  = dataUrl.split(',')[1]
+      setMfpImage({ base64, mediaType, preview: dataUrl })
+      setMfpItems(null)
+      setMfpSel(new Set())
+      setMfpError(null)
+    }
+    reader.readAsDataURL(file)
+  }
+
+  async function parseMfpScreenshot() {
+    if (!mfpImage) return
+    setMfpParsing(true)
+    setMfpError(null)
+    try {
+      const res  = await fetch('/api/parse-mfp', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ imageBase64: mfpImage.base64, mediaType: mfpImage.mediaType }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Parse failed')
+      const items = data.items || []
+      setMfpItems(items)
+      setMfpSel(new Set(items.map((_, i) => i)))
+    } catch (err) {
+      setMfpError(err.message)
+    } finally {
+      setMfpParsing(false)
+    }
+  }
+
+  async function logMfpItems() {
+    if (!mfpItems) return
+    setMfpLogging(true)
+    const toLog = mfpItems.filter((_, i) => mfpSel.has(i))
+    for (const item of toLog) {
+      const data = await insertEntry({
+        user_id:   user.id,
+        date:      selectedDate,
+        food_name: item.food_name,
+        calories:  Math.round(item.calories  || 0),
+        protein_g: Math.round(item.protein_g || 0),
+        carbs_g:   Math.round(item.carbs_g   || 0),
+        fat_g:     Math.round(item.fat_g     || 0),
+        meal_tag:  item.meal_tag || 'snacks',
+      })
+      if (data) {
+        setEntries(e => [...e, data])
+        recordFoodUse({ name: item.food_name, calories: item.calories || 0, protein: item.protein_g || 0, carbs: item.carbs_g || 0, fat: item.fat_g || 0 })
+      }
+    }
+    setMfpLogging(false)
+    setMfpOpen(false)
+    setMfpImage(null)
+    setMfpItems(null)
+    setMfpSel(new Set())
+    setMfpError(null)
+  }
+
+  function closeMfp() {
+    setMfpOpen(false)
+    setMfpImage(null)
+    setMfpItems(null)
+    setMfpSel(new Set())
+    setMfpError(null)
+    setMfpParsing(false)
+  }
+
   function createCustomFood() {
     const name = customDraft.name.trim()
     const cal  = parseFloat(customDraft.cal)
@@ -680,7 +764,29 @@ export default function Nutrition() {
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div>
-      <div className="page-header"><h1>Nutrition</h1></div>
+      <div className="page-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <h1>Nutrition</h1>
+        <button
+          onClick={() => setMfpOpen(true)}
+          title="Import from MyFitnessPal screenshot"
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            background: 'rgba(99,179,237,0.12)', border: '1px solid rgba(99,179,237,0.3)',
+            color: '#63b3ed', borderRadius: 8, padding: '6px 12px',
+            fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+            transition: 'background .15s, border-color .15s',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = 'rgba(99,179,237,0.22)'; e.currentTarget.style.borderColor = 'rgba(99,179,237,0.55)' }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'rgba(99,179,237,0.12)'; e.currentTarget.style.borderColor = 'rgba(99,179,237,0.3)' }}
+        >
+          <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2"/>
+            <polyline points="9 12 12 15 15 12"/>
+            <line x1="12" y1="8" x2="12" y2="15"/>
+          </svg>
+          Import MFP
+        </button>
+      </div>
 
       <div className="page-body" style={{ paddingBottom: 110 }}>
 
@@ -2245,6 +2351,244 @@ export default function Nutrition() {
         emptyTitle="Ask me about your food"
         emptyHints={['Is my protein on track today?', 'What has the most carbs?', 'How balanced is my diet?']}
       />
+
+      {/* ── MFP IMPORT MODAL ── */}
+      {mfpOpen && (
+        <div
+          onClick={e => { if (e.target === e.currentTarget) closeMfp() }}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 9000,
+            background: 'rgba(0,0,0,0.72)', backdropFilter: 'blur(4px)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: 16,
+          }}
+        >
+          <div style={{
+            background: 'var(--surface)', borderRadius: 16, width: '100%', maxWidth: 480,
+            maxHeight: '90vh', overflowY: 'auto',
+            boxShadow: '0 24px 60px rgba(0,0,0,0.5)',
+            border: '1px solid rgba(255,255,255,0.08)',
+          }}>
+            {/* header */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '16px 20px', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>Import from MyFitnessPal</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                  Upload a screenshot — all items log to {isToday ? 'today' : fmtNavDate(selectedDate)}
+                </div>
+              </div>
+              <button onClick={closeMfp} style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                color: 'var(--text-muted)', padding: 4, borderRadius: 6,
+                display: 'flex', alignItems: 'center',
+              }}>
+                <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+
+            <div style={{ padding: 20 }}>
+              {/* upload area */}
+              {!mfpImage ? (
+                <div
+                  onClick={() => mfpFileRef.current?.click()}
+                  onDragOver={e => e.preventDefault()}
+                  onDrop={e => { e.preventDefault(); handleMfpFile(e.dataTransfer.files[0]) }}
+                  style={{
+                    border: '2px dashed rgba(99,179,237,0.35)', borderRadius: 12,
+                    padding: '36px 20px', textAlign: 'center', cursor: 'pointer',
+                    transition: 'border-color .15s, background .15s',
+                    background: 'rgba(99,179,237,0.04)',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(99,179,237,0.65)'; e.currentTarget.style.background = 'rgba(99,179,237,0.09)' }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(99,179,237,0.35)'; e.currentTarget.style.background = 'rgba(99,179,237,0.04)' }}
+                >
+                  <svg width={32} height={32} viewBox="0 0 24 24" fill="none" stroke="#63b3ed" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginBottom: 10, opacity: 0.7 }}>
+                    <rect x="3" y="3" width="18" height="18" rx="2"/>
+                    <circle cx="8.5" cy="8.5" r="1.5"/>
+                    <polyline points="21 15 16 10 5 21"/>
+                  </svg>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>
+                    Drop screenshot here or click to upload
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                    PNG, JPG, or WebP — any MFP diary screenshot
+                  </div>
+                  <input
+                    ref={mfpFileRef}
+                    type="file"
+                    accept="image/*"
+                    style={{ display: 'none' }}
+                    onChange={e => handleMfpFile(e.target.files[0])}
+                  />
+                </div>
+              ) : (
+                <div>
+                  {/* image preview */}
+                  <div style={{ position: 'relative', marginBottom: 14 }}>
+                    <img
+                      src={mfpImage.preview}
+                      alt="MFP screenshot"
+                      style={{ width: '100%', borderRadius: 10, maxHeight: 260, objectFit: 'contain',
+                        background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.08)' }}
+                    />
+                    <button
+                      onClick={() => { setMfpImage(null); setMfpItems(null); setMfpSel(new Set()); setMfpError(null) }}
+                      style={{
+                        position: 'absolute', top: 8, right: 8,
+                        background: 'rgba(0,0,0,0.7)', border: 'none', cursor: 'pointer',
+                        color: 'var(--text-muted)', borderRadius: 6, padding: '3px 7px',
+                        fontSize: 11, fontWeight: 600,
+                      }}
+                    >
+                      Change
+                    </button>
+                  </div>
+
+                  {/* parse button (shown before parsing) */}
+                  {mfpItems === null && !mfpParsing && (
+                    <button
+                      onClick={parseMfpScreenshot}
+                      style={{
+                        width: '100%', padding: '11px 0',
+                        background: '#63b3ed', color: '#000', border: 'none',
+                        borderRadius: 10, fontSize: 14, fontWeight: 700,
+                        cursor: 'pointer', fontFamily: 'inherit',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                      }}
+                    >
+                      <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                      </svg>
+                      Read Screenshot
+                    </button>
+                  )}
+
+                  {/* parsing spinner */}
+                  {mfpParsing && (
+                    <div style={{ textAlign: 'center', padding: '20px 0', color: 'var(--text-muted)', fontSize: 13 }}>
+                      <div style={{ marginBottom: 10, fontSize: 22 }}>
+                        <svg width={24} height={24} viewBox="0 0 24 24" fill="none" stroke="#63b3ed" strokeWidth="2" strokeLinecap="round" style={{ animation: 'spin 1s linear infinite' }}>
+                          <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+                        </svg>
+                      </div>
+                      Reading your screenshot…
+                    </div>
+                  )}
+
+                  {/* error */}
+                  {mfpError && (
+                    <div style={{ background: 'rgba(245,101,101,0.1)', border: '1px solid rgba(245,101,101,0.3)',
+                      borderRadius: 8, padding: '10px 14px', marginBottom: 12, fontSize: 13, color: '#fc8181' }}>
+                      {mfpError}
+                    </div>
+                  )}
+
+                  {/* item review list */}
+                  {mfpItems !== null && mfpItems.length === 0 && (
+                    <div style={{ textAlign: 'center', padding: '16px 0', color: 'var(--text-muted)', fontSize: 13 }}>
+                      No food items were found in this screenshot.
+                    </div>
+                  )}
+
+                  {mfpItems !== null && mfpItems.length > 0 && (() => {
+                    const byMeal = { breakfast: [], lunch: [], dinner: [], snacks: [] }
+                    mfpItems.forEach((item, i) => { byMeal[item.meal_tag]?.push({ ...item, _i: i }) })
+                    const sectionLabels = { breakfast: 'Breakfast', lunch: 'Lunch', dinner: 'Dinner', snacks: 'Snacks' }
+                    const selCount = mfpSel.size
+
+                    return (
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                          marginBottom: 10 }}>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>
+                            {mfpItems.length} item{mfpItems.length !== 1 ? 's' : ''} found
+                          </span>
+                          <button
+                            onClick={() => setMfpSel(selCount === mfpItems.length ? new Set() : new Set(mfpItems.map((_, i) => i)))}
+                            style={{ fontSize: 11, fontWeight: 600, color: '#63b3ed', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                          >
+                            {selCount === mfpItems.length ? 'Deselect all' : 'Select all'}
+                          </button>
+                        </div>
+
+                        {Object.entries(byMeal).map(([key, items]) => items.length === 0 ? null : (
+                          <div key={key} style={{ marginBottom: 14 }}>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)',
+                              textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 5 }}>
+                              {sectionLabels[key]}
+                            </div>
+                            {items.map(item => (
+                              <div
+                                key={item._i}
+                                onClick={() => setMfpSel(prev => {
+                                  const n = new Set(prev)
+                                  n.has(item._i) ? n.delete(item._i) : n.add(item._i)
+                                  return n
+                                })}
+                                style={{
+                                  display: 'flex', alignItems: 'center', gap: 10,
+                                  padding: '8px 10px', borderRadius: 8, marginBottom: 3,
+                                  background: mfpSel.has(item._i) ? 'rgba(99,179,237,0.1)' : 'rgba(255,255,255,0.03)',
+                                  border: `1px solid ${mfpSel.has(item._i) ? 'rgba(99,179,237,0.3)' : 'rgba(255,255,255,0.06)'}`,
+                                  cursor: 'pointer', transition: 'background .12s, border-color .12s',
+                                  opacity: mfpSel.has(item._i) ? 1 : 0.45,
+                                }}
+                              >
+                                {/* checkbox */}
+                                <div style={{
+                                  width: 16, height: 16, borderRadius: 4, flexShrink: 0,
+                                  background: mfpSel.has(item._i) ? '#63b3ed' : 'transparent',
+                                  border: `2px solid ${mfpSel.has(item._i) ? '#63b3ed' : 'rgba(255,255,255,0.2)'}`,
+                                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                  transition: 'all .12s',
+                                }}>
+                                  {mfpSel.has(item._i) && (
+                                    <svg width={9} height={9} viewBox="0 0 12 12" fill="none" stroke="#000" strokeWidth="2.5" strokeLinecap="round"><polyline points="2 6 5 9 10 3"/></svg>
+                                  )}
+                                </div>
+                                {/* name + macros */}
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)',
+                                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                    {item.food_name}
+                                  </div>
+                                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1, display: 'flex', gap: 8 }}>
+                                    <span style={{ color: 'var(--text)', fontWeight: 600 }}>{item.calories} cal</span>
+                                    <span>P {item.protein_g}g</span>
+                                    <span>C {item.carbs_g}g</span>
+                                    <span>F {item.fat_g}g</span>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ))}
+
+                        <button
+                          onClick={logMfpItems}
+                          disabled={selCount === 0 || mfpLogging}
+                          style={{
+                            width: '100%', marginTop: 4, padding: '12px 0',
+                            background: selCount === 0 ? 'rgba(255,255,255,0.06)' : '#63b3ed',
+                            color: selCount === 0 ? 'var(--text-muted)' : '#000',
+                            border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 700,
+                            cursor: selCount === 0 ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
+                          }}
+                        >
+                          {mfpLogging ? 'Logging…' : `Log ${selCount} item${selCount !== 1 ? 's' : ''}`}
+                        </button>
+                      </div>
+                    )
+                  })()}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
 
       <style>{`
         @keyframes nutPanelUp {
