@@ -310,9 +310,26 @@ export default function Overview() {
     setLoadTick(t => t + 1)
   }
 
-  const secId    = currentSectionId()
-  const secTasks = sdtData.filter(t => t.section_id === secId && !t.completed)
-  const secDone  = sdtData.filter(t => t.section_id === secId && t.completed).length
+  const secId       = currentSectionId()
+  const secAllTasks = sdtData.filter(t => t.section_id === secId)
+  const secTasks    = secAllTasks.filter(t => !t.completed)
+  const secDone     = secAllTasks.filter(t =>  t.completed).length
+
+  function notifyTodos(detail) {
+    window.dispatchEvent(new CustomEvent('todos-changed', { detail: detail || null }))
+  }
+
+  function toggleSdt(taskId) {
+    const cur = sdtData.find(t => t.id === taskId)
+    if (!cur) return
+    const completed = !cur.completed
+    setSdtData(prev => prev.map(t => t.id === taskId ? { ...t, completed } : t))
+    notifyTodos({ doneDelta: completed ? 1 : -1 })
+    supabase.from('schedule_day_tasks')
+      .update({ completed, completed_at: completed ? new Date().toISOString() : null })
+      .eq('id', taskId).eq('user_id', user.id)
+      .then(({ error }) => { if (error) setSdtData(prev => prev.map(t => t.id === taskId ? { ...t, completed: !completed } : t)) })
+  }
 
   // ── Mobile render ────────────────────────────────────────────────────
   if (isMobile) {
@@ -354,23 +371,36 @@ export default function Overview() {
 
         {/* Right Now card */}
         <div style={{ ...card, margin: '0 14px 10px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: secTasks.length > 0 ? 10 : 6 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: secAllTasks.length > 0 ? 10 : 6 }}>
             <span style={capLabel}>Right Now · {currentSectionLabel()}</span>
             <GoLink to="/schedule">Schedule</GoLink>
           </div>
-          {secTasks.length === 0 && secDone === 0
+          {secAllTasks.length === 0
             ? <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>Nothing scheduled for this block.</div>
-            : secTasks.length === 0
-              ? <div style={{ fontSize: 13, color: 'var(--success)', display: 'flex', alignItems: 'center', gap: 5 }}>
-                  <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
-                  All {secDone} done
-                </div>
-              : <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  {secTasks.slice(0, 4).map((t, i) => (
-                    <span key={t.id || i} style={{ fontSize: 12, padding: '4px 11px', borderRadius: 99, background: 'rgba(255,255,255,0.06)', color: 'var(--text-light)', border: '1px solid rgba(255,255,255,0.08)' }}>{t.title}</span>
-                  ))}
-                  {secTasks.length > 4 && <span style={{ fontSize: 11, color: 'var(--text-muted)', alignSelf: 'center' }}>+{secTasks.length - 4}</span>}
-                </div>
+            : <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                {secAllTasks.map((t, i) => (
+                  <button key={t.id || i} onClick={() => toggleSdt(t.id)} style={{
+                    display: 'flex', alignItems: 'center', gap: 9,
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    padding: '4px 2px', textAlign: 'left', width: '100%',
+                  }}>
+                    <div style={{
+                      width: 16, height: 16, borderRadius: 4, flexShrink: 0,
+                      background: t.completed ? 'var(--success)' : 'transparent',
+                      border: `2px solid ${t.completed ? 'var(--success)' : 'rgba(255,255,255,0.2)'}`,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      transition: 'all .15s',
+                    }}>
+                      {t.completed && <svg width={9} height={9} viewBox="0 0 12 12" fill="none" stroke="#000" strokeWidth="2.5" strokeLinecap="round"><polyline points="2 6 5 9 10 3"/></svg>}
+                    </div>
+                    <span style={{
+                      fontSize: 13, color: t.completed ? 'var(--text-muted)' : 'var(--text)',
+                      textDecoration: t.completed ? 'line-through' : 'none',
+                      transition: 'color .15s',
+                    }}>{t.title}</span>
+                  </button>
+                ))}
+              </div>
           }
         </div>
 
@@ -560,23 +590,32 @@ export default function Overview() {
 
           {/* Right Now */}
           <Sec label={`Right Now · ${currentSectionLabel()}`} right={<GoLink to="/schedule">Schedule</GoLink>} />
-          {secTasks.length === 0 && secDone === 0
+          {secAllTasks.length === 0
             ? <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 2 }}>Nothing scheduled for this block.</div>
-            : secTasks.length === 0
-              ? <div style={{ fontSize: 12, color: 'var(--success)', display: 'flex', alignItems: 'center', gap: 5, marginBottom: 2 }}>
-                  <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
-                  All {secDone} done
-                </div>
-              : <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                  {secTasks.slice(0, 5).map((t, i) => (
-                    <span key={t.id||i} style={{
-                      fontSize: 12, padding: '4px 11px', borderRadius: 99,
-                      background: 'rgba(255,255,255,0.04)', color: 'var(--text-light)',
-                      border: '1px solid rgba(255,255,255,0.08)',
+            : <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 2 }}>
+                {secAllTasks.map((t, i) => (
+                  <button key={t.id || i} onClick={() => toggleSdt(t.id)} style={{
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    padding: '3px 0', textAlign: 'left', width: '100%',
+                  }}>
+                    <div style={{
+                      width: 15, height: 15, borderRadius: 4, flexShrink: 0,
+                      background: t.completed ? 'var(--success)' : 'transparent',
+                      border: `2px solid ${t.completed ? 'var(--success)' : 'rgba(255,255,255,0.2)'}`,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      transition: 'all .15s',
+                    }}>
+                      {t.completed && <svg width={8} height={8} viewBox="0 0 12 12" fill="none" stroke="#000" strokeWidth="2.5" strokeLinecap="round"><polyline points="2 6 5 9 10 3"/></svg>}
+                    </div>
+                    <span style={{
+                      fontSize: 12, color: t.completed ? 'var(--text-muted)' : 'var(--text-light)',
+                      textDecoration: t.completed ? 'line-through' : 'none',
+                      transition: 'color .15s',
                     }}>{t.title}</span>
-                  ))}
-                  {secTasks.length > 5 && <span style={{ fontSize: 11, color: 'var(--text-muted)', alignSelf: 'center' }}>+{secTasks.length - 5}</span>}
-                </div>
+                  </button>
+                ))}
+              </div>
           }
 
           <Div />
