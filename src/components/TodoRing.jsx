@@ -36,13 +36,14 @@ export default function TodoRing() {
       { data: rComp  },
       { data: sdtData },
     ] = await Promise.all([
-      supabase.from('routine_tasks').select('id').eq('user_id', user.id).eq('active', true),
-      supabase.from('routine_completions').select('id').eq('user_id', user.id).eq('completed_date', today),
+      supabase.from('routine_tasks').select('id').eq('user_id', user.id).eq('active', true).not('schedule_block', 'is', null),
+      supabase.from('routine_completions').select('routine_task_id').eq('user_id', user.id).eq('completed_date', today),
       supabase.from('schedule_day_tasks').select('id,completed').eq('user_id', user.id).eq('task_date', today),
     ])
 
-    const rTotal   = (rTasks  || []).length
-    const rDone    = (rComp   || []).length
+    const assignedIds = new Set((rTasks || []).map(t => t.id))
+    const rTotal   = assignedIds.size
+    const rDone    = (rComp || []).filter(c => assignedIds.has(c.routine_task_id)).length
     const sdtTotal = (sdtData || []).length
     const sdtDone  = (sdtData || []).filter(t => t.completed).length
 

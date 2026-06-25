@@ -245,7 +245,7 @@ export default function Overview() {
         supabase.from('nutrition_entries').select('calories,protein,carbs,fat').eq('user_id', user.id).eq('date', TODAY),
         supabase.from('focus_tasks').select('id,text,completed,priority').eq('user_id', user.id).eq('focus_date', TODAY),
         supabase.from('schedule_day_tasks').select('id,completed,section_id,title').eq('user_id', user.id).eq('task_date', TODAY),
-        supabase.from('routine_tasks').select('id').eq('user_id', user.id).eq('active', true),
+        supabase.from('routine_tasks').select('id').eq('user_id', user.id).eq('active', true).not('schedule_block', 'is', null),
         supabase.from('routine_completions').select('routine_task_id').eq('user_id', user.id).eq('completed_date', TODAY),
         supabase.from('budget_entries').select('*').eq('user_id', user.id).order('date', { ascending: false }).limit(4),
         supabase.from('workout_sets').select('*, exercises(name,muscle_group)').eq('user_id', user.id).eq('logged_date', TODAY),
@@ -257,8 +257,9 @@ export default function Overview() {
       setWaterMl(parseInt(localStorage.getItem(`nutrition-water:${TODAY}`)) || 0)
       setTasks((focusData||[]).map(t=>({...t,title:t.text,_src:'focus'})))
       setSdtData(sdtRes || [])
-      setRoutineTotal((rtData||[]).length)
-      setRoutineDone((rcData||[]).length)
+      const assignedIds = new Set((rtData||[]).map(t => t.id))
+      setRoutineTotal(assignedIds.size)
+      setRoutineDone((rcData||[]).filter(c => assignedIds.has(c.routine_task_id)).length)
       setBalance(parseFloat(localStorage.getItem('actual_balance')) || 0)
       setRecent(budData || [])
       setTodaySets(setsData || [])
