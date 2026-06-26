@@ -36,6 +36,7 @@ const Budget    = lazy(() => import('./pages/Budget'))
 const Music     = lazy(() => import('./pages/Music'))
 const Nutrition = lazy(() => import('./pages/Nutrition'))
 const Settings  = lazy(() => import('./pages/Settings'))
+const Mentor    = lazy(() => import('./pages/Mentor'))
 
 function SetupRequired() {
   return (
@@ -113,6 +114,7 @@ export default function App() {
               <Route path="/music" element={<Music />} />
               <Route path="/nutrition" element={<Nutrition />} />
               <Route path="/body"      element={<Navigate to="/workouts" replace />} />
+              <Route path="/mentor"   element={<Mentor />} />
               <Route path="/settings" element={<Settings />} />
             </Routes>
           </Suspense>
