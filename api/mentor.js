@@ -89,6 +89,11 @@ Existing profile: ${JSON.stringify(existingProfile)}`,
   // Normal chat mode — stream response
   const systemPrompt = buildSystemPrompt(profile, dataSummary, rawData)
 
+  // Strip any extra UI-only fields before sending to Anthropic
+  const cleanMessages = (messages || [])
+    .filter(m => m.role && m.content)
+    .map(m => ({ role: m.role, content: String(m.content) }))
+
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache')
   res.setHeader('Connection', 'keep-alive')
@@ -98,7 +103,7 @@ Existing profile: ${JSON.stringify(existingProfile)}`,
       model: 'claude-sonnet-4-6',
       max_tokens: 1500,
       system: systemPrompt,
-      messages: messages || [],
+      messages: cleanMessages,
     })
 
     for await (const chunk of stream) {
