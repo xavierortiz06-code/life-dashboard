@@ -107,7 +107,8 @@ async function executeAction(action, userId, exercises, setExercises, tasks, rou
   }
 
   else if (action.type === 'add_todo') {
-    const { error } = await supabase.from('task_list').insert({ user_id: userId, title: action.title, priority: action.priority || 'normal', due_date: action.due_date || null, notes: null, position: 9999 })
+    const table = action.list === 'claude_tasks' ? 'claude_tasks' : 'task_list'
+    const { error } = await supabase.from(table).insert({ user_id: userId, title: action.title, priority: action.priority || 'normal', due_date: action.due_date || null, notes: null, position: 9999 })
     if (error) throw new Error(error.message)
   }
 

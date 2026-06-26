@@ -30,7 +30,8 @@ WORKOUT:
 - Match exercise name to saved exercises when close
 
 TODO (add new task):
-{"type":"add_todo","title":"<title>","priority":"high"|"normal"|"low","due_date":"<YYYY-MM-DD>"|null,"message":"<confirmation>"}
+{"type":"add_todo","title":"<title>","priority":"high"|"normal"|"low","due_date":"<YYYY-MM-DD>"|null,"list":"task_list"|"claude_tasks","message":"<confirmation>"}
+- list: use "claude_tasks" if user says "claude to-do", "claude tasks", "claude list", or "claude's list". Default: "task_list"
 
 COMPLETE TASK (check off / mark done an existing task or routine):
 {"type":"complete_task","task_id":<id>|null,"task_title":"<exact title from list>","item_type":"task"|"routine","message":"<confirmation>"}
