@@ -1727,7 +1727,8 @@ function SavingsSheet({ goals, setGoals, nextId, setNextId, income, planRows, en
 
   const totalTarget    = goals.reduce((s, g) => s + (parseFloat(g.target) || 0), 0)
   const totalSaved     = goals.reduce((s, g) => s + (parseFloat(g.saved)  || 0), 0)
-  const totalPct       = totalTarget > 0 ? Math.min((totalSaved / totalTarget) * 100, 100) : 0
+  const displaySaved   = snapshotSavings !== null ? snapshotSavings : totalSaved
+  const totalPct       = totalTarget > 0 ? Math.min((displaySaved / totalTarget) * 100, 100) : 0
 
   // Savings allocation
   const allocTotal    = goals.reduce((s, g) => s + (parseFloat(g.allocPct) || 0), 0)
@@ -1849,7 +1850,7 @@ function SavingsSheet({ goals, setGoals, nextId, setNextId, income, planRows, en
         <div className="stats-row">
           <div className="stat-card">
             <div className="stat-label">Total Saved</div>
-            <div className="stat-value" style={{ color: 'var(--success)' }}>{fmt(totalSaved)}</div>
+            <div className="stat-value" style={{ color: 'var(--success)' }}>{fmt(displaySaved)}</div>
           </div>
           <div className="stat-card">
             <div className="stat-label">Total Target</div>
@@ -2101,7 +2102,7 @@ function SavingsSheet({ goals, setGoals, nextId, setNextId, income, planRows, en
               <div />
               <div style={{ paddingLeft: 10, fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Total</div>
               <div style={{ textAlign: 'right', paddingRight: 8, fontWeight: 700, fontSize: 13, fontFamily: 'var(--mono)' }}>{fmtAmt(totalTarget)}</div>
-              <div style={{ textAlign: 'right', paddingRight: 8, fontWeight: 700, fontSize: 13, fontFamily: 'var(--mono)', color: 'var(--success)' }}>{fmtAmt(totalSaved)}</div>
+              <div style={{ textAlign: 'right', paddingRight: 8, fontWeight: 700, fontSize: 13, fontFamily: 'var(--mono)', color: 'var(--success)' }}>{fmtAmt(displaySaved)}</div>
               <div style={{ paddingLeft: 10, paddingRight: 8 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <div style={{ flex: 1, height: 6, background: 'rgba(255,255,255,0.07)', borderRadius: 3, overflow: 'hidden' }}>
