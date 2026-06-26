@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { useApp } from '../contexts/AppContext'
-import FloatingChat from '../components/FloatingChat'
 import { cacheGet, cacheSet } from '../lib/cache'
 import SkeletonList from '../components/Skeleton'
 
@@ -745,14 +744,6 @@ Guidelines:
           </div>
         )}
       </div>
-      <FloatingChat
-        title="Budget Assistant"
-        placeholder="Ask about your budget…"
-        systemPrompt={aiSystemPrompt}
-        context={aiContext}
-        emptyTitle="Ask me about your finances"
-        emptyHints={["Where am I overspending this week?", "How much did I save this month?", "What should I adjust in my budget?"]}
-      />
     </div>
   )
 }

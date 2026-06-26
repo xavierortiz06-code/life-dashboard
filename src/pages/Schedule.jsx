@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useApp } from '../contexts/AppContext'
 import { supabase } from '../lib/supabase'
-import FloatingChat from '../components/FloatingChat'
 import { getActiveDate } from '../lib/dateUtils'
 
 const TODAY = getActiveDate()
@@ -441,6 +440,44 @@ export default function Schedule() {
     }
   }, [])
 
+  // Auto-uncheck: if a To-Do task wasn't completed on its scheduled day, remove it so it can be rescheduled
+  useEffect(() => {
+    if (!user?.id) return
+    async function cleanPastUnfinished() {
+      const weekStart = getWeekMonday(TODAY) // only clean up tasks from previous weeks
+      const { data: stale } = await supabase
+        .from('schedule_day_tasks')
+        .select('id')
+        .eq('user_id', user.id)
+        .lt('task_date', weekStart)
+        .eq('completed', false)
+        .not('source_id', 'is', null)
+      if (!stale?.length) return
+      await supabase.from('schedule_day_tasks')
+        .delete().in('id', stale.map(r => r.id)).eq('user_id', user.id)
+      setDataRaw(prev => {
+        const days = { ...prev.days }
+        let changed = false
+        for (const d of Object.keys(days)) {
+          if (d >= weekStart) continue
+          const day = days[d]
+          const cleaned = {}
+          for (const [secId, tasks] of Object.entries(day)) {
+            const filtered = Array.isArray(tasks) ? tasks.filter(t => t.completed || !t.sourceId) : tasks
+            if (filtered !== tasks) changed = true
+            cleaned[secId] = filtered
+          }
+          days[d] = cleaned
+        }
+        if (!changed) return prev
+        const next = { ...prev, days }
+        localStorage.setItem(STORE, JSON.stringify(next))
+        return next
+      })
+    }
+    cleanPastUnfinished()
+  }, [user?.id])
+
   // Fix 2 & 3 — Fetch workout sessions and nutrition logs from Supabase
   useEffect(() => {
     if (!user?.id) return
@@ -812,10 +849,23 @@ export default function Schedule() {
 
   // To-Do chips available to drag onto the Day view (not already placed that day)
   const dayPlacedSourceIds = new Set(getAllTasks(data.days[viewDate]).map(t => t.sourceId).filter(Boolean))
-  const dayTodoChips = [
+  // Tasks placed on OTHER days of the same week (not yet completed) — show as "scheduled" in the tray
+  const viewWeekDays = getWeek(getWeekMonday(viewDate))
+  const dayScheduledElsewhere = new Map() // sourceId → { d, name }
+  for (const d of viewWeekDays) {
+    if (d === viewDate) continue
+    for (const t of getAllTasks(data.days[d])) {
+      if (t.sourceId && !t.completed && !dayScheduledElsewhere.has(t.sourceId)) {
+        dayScheduledElsewhere.set(t.sourceId, { d, name: dayShort(d) })
+      }
+    }
+  }
+  const allTodoChipCandidates = [
     ...focusTasks.map(t => ({ id: t.id, title: t.title, _src: 'focus' })),
     ...taskListItems.map(t => ({ id: t.id, title: t.title, _src: 'task' })),
-  ].filter(t => !dayPlacedSourceIds.has(t.id))
+  ]
+  const dayTodoChips = allTodoChipCandidates.filter(t => !dayPlacedSourceIds.has(t.id) && !dayScheduledElsewhere.has(t.id))
+  const dayScheduledChips = allTodoChipCandidates.filter(t => !dayPlacedSourceIds.has(t.id) && dayScheduledElsewhere.has(t.id))
 
   // ── AI context builder ─────────────────────────────────────
   function buildAIContext() {
@@ -1142,7 +1192,7 @@ export default function Schedule() {
               )}
 
               {/* ── To-Do tray — drag any of these into a time block ── */}
-              {dayTodoChips.length > 0 && (
+              {(dayTodoChips.length > 0 || dayScheduledChips.length > 0) && (
                 <div className="card" style={{ padding: '12px 14px' }}>
                   <button
                     onClick={() => setTodoTrayOpen(o => !o)}
@@ -1181,6 +1231,29 @@ export default function Schedule() {
                           {chip._src === 'focus' && <span style={{ fontSize: 8, fontWeight: 700, color: '#6366f1' }}>FOCUS</span>}
                         </div>
                       ))}
+                      {dayScheduledChips.map(chip => {
+                        const sched = dayScheduledElsewhere.get(chip.id)
+                        return (
+                          <div
+                            key={`sched-${chip._src}-${chip.id}`}
+                            title={`Scheduled for ${sched?.name}`}
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: 6, padding: '6px 11px', borderRadius: 8,
+                              background: isDark ? 'rgba(99,102,241,0.06)' : 'rgba(99,102,241,0.04)',
+                              border: '1px solid rgba(99,102,241,0.2)',
+                              fontSize: 12, cursor: 'default', userSelect: 'none', color: 'var(--text-muted)',
+                            }}
+                          >
+                            <svg width={9} height={9} viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+                            </svg>
+                            {chip.title}
+                            <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--accent)', background: 'rgba(99,102,241,0.1)', padding: '1px 5px', borderRadius: 4, flexShrink: 0 }}>
+                              {sched?.name}
+                            </span>
+                          </div>
+                        )
+                      })}
                     </div>
                   )}
                 </div>
@@ -1846,19 +1919,6 @@ export default function Schedule() {
 
       </div>
 
-      {/* AI Assistant */}
-      <FloatingChat
-        title="Schedule Assistant"
-        placeholder="Plan my day, reschedule tasks…"
-        systemPrompt={`You are a schedule assistant for a personal life dashboard. Help the user plan their day, reschedule tasks, suggest time management strategies, and answer questions about their schedule. Keep replies concise and actionable. Today is ${fmtFull(TODAY)}.`}
-        context={buildAIContext()}
-        emptyTitle="Plan your schedule"
-        emptyHints={[
-          'Plan my day',
-          "What's on my plate this week?",
-          'Add a dentist appointment Friday at 2pm',
-        ]}
-      />
     </div>
   )
 }

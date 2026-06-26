@@ -4,7 +4,6 @@ import { supabase } from '../lib/supabase'
 import { useApp } from '../contexts/AppContext'
 import { getMacroGoals } from '../lib/goals'
 import { getActiveDate } from '../lib/dateUtils'
-import ActionChat from '../components/ActionChat'
 import MentorChat from '../components/MentorChat'
 import { pctColor } from '../components/TodoRing'
 
@@ -798,10 +797,7 @@ export default function Overview() {
         </div>
       </div>
 
-      {/* AI Log chat — full width at the bottom */}
-      <ActionChat userId={user?.id} />
-
-      {/* Mentor chat */}
+      {/* Mentor — handles chat, logging, task completion, and more */}
       <MentorChat />
 
     </div>

@@ -5,7 +5,6 @@ import { cacheGet, cacheSet } from '../lib/cache'
 import { MACRO_DEFAULTS, setMacroGoals } from '../lib/goals'
 import SkeletonList from '../components/Skeleton'
 import { getActiveDate, formatShortDate } from '../lib/dateUtils'
-import FloatingChat from '../components/FloatingChat'
 import { BarcodeDetector as BarcodeDetectorPolyfill } from 'barcode-detector'
 import { searchFoods, lookupBarcode as offLookupBarcode, getCustomFoods, saveCustomFood, deleteCustomFood, macrosFor } from '../lib/foodApi'
 
@@ -2343,14 +2342,6 @@ export default function Nutrition() {
         </button>
       </div>
 
-      <FloatingChat
-        title="Nutrition AI"
-        placeholder="Ask about your food…"
-        systemPrompt={AI_SYSTEM}
-        context={aiContext}
-        emptyTitle="Ask me about your food"
-        emptyHints={['Is my protein on track today?', 'What has the most carbs?', 'How balanced is my diet?']}
-      />
 
       {/* ── MFP IMPORT MODAL ── */}
       {mfpOpen && (
