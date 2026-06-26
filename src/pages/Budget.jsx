@@ -1178,20 +1178,40 @@ function BudgetPlan({ planRows, setPlanRows, planNextId, setPlanNextId, planInco
   )
 
   // Auto-sync: whenever subscription costs or income change, push the exact pct
-  // into any row whose name matches "subscr/subs"
+  // into any row whose name matches "subscr/subs", redistributing unlocked rows
+  // so the total always stays exactly 100%
   useEffect(() => {
     if (income <= 0) return
-    const neededPct = Math.round(weeklySubsNeeded / income * 1000) / 10
+    const neededPct = Math.round(weeklySubsNeeded / income * 100000) / 1000  // 3dp
     setRows(rs => {
-      if (!rs.some(r => /subscri|subs/.test(r.name.toLowerCase()))) return rs
-      let changed = false
-      const next = rs.map(r => {
-        if (!/subscri|subs/.test(r.name.toLowerCase())) return r
-        if (Math.abs((parseFloat(r.pct) || 0) - neededPct) < 0.05) return r
-        changed = true
-        return { ...r, pct: String(neededPct) }
+      const subsRow = rs.find(r => /subscri|subs/.test(r.name.toLowerCase()))
+      if (!subsRow) return rs
+      if (Math.abs((parseFloat(subsRow.pct) || 0) - neededPct) < 0.001) return rs
+
+      // Mirror setPct redistribution logic so total stays at 100%
+      const id             = subsRow.id
+      const lockedOthers   = rs.filter(r => r.id !== id && r.locked)
+      const unlockedOthers = rs.filter(r => r.id !== id && !r.locked)
+      const lockedSum      = lockedOthers.reduce((s, r) => s + (parseFloat(r.pct) || 0), 0)
+      const maxForId       = Math.max(0, 100 - lockedSum)
+      const clampedPct     = Math.min(neededPct, maxForId)
+      const safeRemaining  = Math.max(0, 100 - clampedPct - lockedSum)
+
+      if (unlockedOthers.length === 0) {
+        return rs.map(r => r.id === id ? { ...r, pct: String(clampedPct) } : r)
+      }
+
+      const perOther = safeRemaining / unlockedOthers.length
+      const rounded  = Math.round(perOther * 1000) / 1000
+      const sumBase  = rounded * (unlockedOthers.length - 1)
+      const lastVal  = Math.max(0, Math.round((safeRemaining - sumBase) * 1000) / 1000)
+      const lastId   = unlockedOthers[unlockedOthers.length - 1].id
+
+      return rs.map(r => {
+        if (r.id === id) return { ...r, pct: String(clampedPct) }
+        if (r.locked) return r
+        return { ...r, pct: String(r.id === lastId ? lastVal : rounded) }
       })
-      return changed ? next : rs
     })
   }, [monthlySubsTotal, income])
 
@@ -1220,12 +1240,14 @@ function BudgetPlan({ planRows, setPlanRows, planNextId, setPlanNextId, planInco
       const lockedOthers   = rs.filter(r => r.id !== id && r.locked)
       const unlockedOthers = rs.filter(r => r.id !== id && !r.locked)
       const lockedSum      = lockedOthers.reduce((s, r) => s + (parseFloat(r.pct) || 0), 0)
-      const remaining      = 100 - newPct - lockedSum
+      // Cap this row so total never exceeds 100%
+      const maxForId   = Math.max(0, 100 - lockedSum)
+      const clampedPct = Math.min(newPct, maxForId)
+      const remaining  = 100 - clampedPct - lockedSum
 
       if (unlockedOthers.length === 0) {
-        return rs.map(r => r.id === id ? { ...r, pct: String(newPct) } : r)
+        return rs.map(r => r.id === id ? { ...r, pct: String(clampedPct) } : r)
       }
-      // Clamp to 0 — locked rows may already consume ≥100%, never push unlocked negative
       const safeRemaining = Math.max(0, remaining)
       const perOther = safeRemaining / unlockedOthers.length
       const rounded  = Math.round(perOther * 1000) / 1000
@@ -1233,7 +1255,7 @@ function BudgetPlan({ planRows, setPlanRows, planNextId, setPlanNextId, planInco
       const lastVal  = Math.max(0, Math.round((safeRemaining - sumBase) * 1000) / 1000)
       const lastId   = unlockedOthers[unlockedOthers.length - 1].id
       return rs.map(r => {
-        if (r.id === id) return { ...r, pct: String(newPct) }
+        if (r.id === id) return { ...r, pct: String(clampedPct) }
         if (r.locked) return r
         return { ...r, pct: String(r.id === lastId ? lastVal : rounded) }
       })
@@ -1703,9 +1725,9 @@ function SavingsSheet({ goals, setGoals, nextId, setNextId, income, planRows, en
     return parseFloat(goal.saved) || 0
   }
 
-  const totalTarget = goals.reduce((s, g) => s + (parseFloat(g.target) || 0), 0)
-  const totalSaved  = goals.reduce((s, g) => s + (parseFloat(g.saved)  || 0), 0)
-  const totalPct    = totalTarget > 0 ? Math.min((totalSaved / totalTarget) * 100, 100) : 0
+  const totalTarget    = goals.reduce((s, g) => s + (parseFloat(g.target) || 0), 0)
+  const totalSaved     = goals.reduce((s, g) => s + (parseFloat(g.saved)  || 0), 0)
+  const totalPct       = totalTarget > 0 ? Math.min((totalSaved / totalTarget) * 100, 100) : 0
 
   // Savings allocation
   const allocTotal    = goals.reduce((s, g) => s + (parseFloat(g.allocPct) || 0), 0)
@@ -2079,7 +2101,7 @@ function SavingsSheet({ goals, setGoals, nextId, setNextId, income, planRows, en
               <div />
               <div style={{ paddingLeft: 10, fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Total</div>
               <div style={{ textAlign: 'right', paddingRight: 8, fontWeight: 700, fontSize: 13, fontFamily: 'var(--mono)' }}>{fmtAmt(totalTarget)}</div>
-              <div style={{ textAlign: 'right', paddingRight: 8, fontWeight: 700, fontSize: 13, fontFamily: 'var(--mono)', color: 'var(--success)' }}>{fmtAmt(totalSaved)}</div>
+              <div style={{ textAlign: 'right', paddingRight: 8, fontWeight: 700, fontSize: 13, fontFamily: 'var(--mono)', color: 'var(--success)' }}>{fmtAmt(effectiveSaved)}</div>
               <div style={{ paddingLeft: 10, paddingRight: 8 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <div style={{ flex: 1, height: 6, background: 'rgba(255,255,255,0.07)', borderRadius: 3, overflow: 'hidden' }}>
