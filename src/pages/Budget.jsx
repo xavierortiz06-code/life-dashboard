@@ -2101,7 +2101,7 @@ function SavingsSheet({ goals, setGoals, nextId, setNextId, income, planRows, en
               <div />
               <div style={{ paddingLeft: 10, fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Total</div>
               <div style={{ textAlign: 'right', paddingRight: 8, fontWeight: 700, fontSize: 13, fontFamily: 'var(--mono)' }}>{fmtAmt(totalTarget)}</div>
-              <div style={{ textAlign: 'right', paddingRight: 8, fontWeight: 700, fontSize: 13, fontFamily: 'var(--mono)', color: 'var(--success)' }}>{fmtAmt(effectiveSaved)}</div>
+              <div style={{ textAlign: 'right', paddingRight: 8, fontWeight: 700, fontSize: 13, fontFamily: 'var(--mono)', color: 'var(--success)' }}>{fmtAmt(totalSaved)}</div>
               <div style={{ paddingLeft: 10, paddingRight: 8 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <div style={{ flex: 1, height: 6, background: 'rgba(255,255,255,0.07)', borderRadius: 3, overflow: 'hidden' }}>
