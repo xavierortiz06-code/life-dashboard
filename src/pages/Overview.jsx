@@ -5,6 +5,7 @@ import { useApp } from '../contexts/AppContext'
 import { getMacroGoals } from '../lib/goals'
 import { getActiveDate } from '../lib/dateUtils'
 import ActionChat from '../components/ActionChat'
+import MentorChat from '../components/MentorChat'
 import { pctColor } from '../components/TodoRing'
 
 const TODAY = getActiveDate()
@@ -799,6 +800,9 @@ export default function Overview() {
 
       {/* AI Log chat — full width at the bottom */}
       <ActionChat userId={user?.id} />
+
+      {/* Mentor chat */}
+      <MentorChat />
 
     </div>
   )

@@ -22,7 +22,6 @@ const NAV = [
   { to: '/budget',    icon: BudgetIcon,    label: 'Budget' },
   { to: '/music',     icon: MusicIcon,     label: 'Music' },
   { to: '/nutrition', icon: NutritionIcon, label: 'Nutrition' },
-  { to: '/mentor',    icon: MentorIcon,    label: 'Mentor'   },
   { to: '/settings',  icon: SettingsIcon,  label: 'Settings' },
 ]
 
