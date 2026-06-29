@@ -5,6 +5,7 @@ import { useApp } from '../contexts/AppContext'
 import { getMacroGoals } from '../lib/goals'
 import { getActiveDate } from '../lib/dateUtils'
 import MentorChat from '../components/MentorChat'
+import ActionChat from '../components/ActionChat'
 import { pctColor } from '../components/TodoRing'
 
 const TODAY = getActiveDate()
