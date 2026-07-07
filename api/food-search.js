@@ -1,100 +1,118 @@
-// Vercel serverless function — food autocomplete using USDA FoodData Central
-// Free API key signup: https://fdc.nal.usda.gov/api-key-signup.html
-// Falls back to DEMO_KEY (30 req/min, fine for personal use)
-// Set USDA_API_KEY in Vercel env vars for higher limits
+// Vercel serverless — USDA FoodData Central proxy
+// Keeps FDC_API_KEY server-side; returns raw USDA food objects so the
+// client's existing normalizeUsdaFood() can process them without duplication.
+//
+// GET /api/food-search?q=chicken+breast          — text search
+// GET /api/food-search?barcode=012345678901      — UPC barcode lookup
 
-const NUTRIENT = {
-  calories: [1008],            // Energy (kcal)
-  protein:  [1003],            // Protein
-  carbs:    [1005],            // Carbohydrate, by difference
-  fat:      [1004],            // Total lipid (fat)
+const API_KEY = process.env.FDC_API_KEY || process.env.USDA_API_KEY || 'DEMO_KEY'
+const FDC_BASE = 'https://api.nal.usda.gov/fdc/v1'
+
+// Nutrient IDs we care about — returned in full detail by /v1/food/:id
+const WANTED_NUTRIENTS = new Set([
+  '203','204','205','208','269','291','307',   // protein, fat, carbs, kcal, sugar, fiber, sodium
+  '957','958',                                  // Atwater-specific energy
+  '1003','1004','1005','1008',                 // alternate IDs from search endpoint
+])
+
+function buildUrl(path, params) {
+  const u = new URL(FDC_BASE + path)
+  u.searchParams.set('api_key', API_KEY)
+  for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v)
+  return u.toString()
 }
 
-function getNutrient(list, ids) {
-  for (const id of ids) {
-    const found = list.find(n => n.nutrientId === id)
-    if (found?.value != null) return Math.round(found.value)
+// Normalize nutrient list from either search or detail endpoint.
+// The search endpoint uses `nutrientId`, the detail endpoint uses `nutrient.id`.
+function pickNutrients(list) {
+  const out = []
+  for (const n of list || []) {
+    // Search endpoint: n.nutrientNumber (string "208"), n.nutrientId (number)
+    // Detail endpoint: n.nutrient.id, n.number
+    const num = String(n.nutrientNumber ?? n.nutrientId ?? n.nutrient?.id ?? n.number ?? '')
+    if (!num || !WANTED_NUTRIENTS.has(num)) continue
+    if (n.value != null) out.push({ nutrientNumber: num, value: n.value })
   }
-  return 0
+  return out
+}
+
+// Build the food object shape that foodApi.js's normalizeUsdaFood() expects.
+function shapeFood(f) {
+  return {
+    fdcId:                 f.fdcId,
+    description:          f.description,
+    dataType:             f.dataType,
+    brandOwner:           f.brandOwner   || f.brandName || null,
+    brandName:            f.brandName    || null,
+    servingSize:          f.servingSize  || null,
+    servingSizeUnit:      f.servingSizeUnit || null,
+    householdServingFullText: f.householdServingFullText || null,
+    foodNutrients:        pickNutrients(f.foodNutrients || []),
+    foodMeasures:         (f.foodMeasures || []).map(m => ({
+      disseminatedText: m.disseminatedText || '',
+      gramWeight:       m.gramWeight || 0,
+    })),
+  }
 }
 
 export default async function handler(req, res) {
-  // Allow CORS preflight
   res.setHeader('Access-Control-Allow-Origin', '*')
   if (req.method === 'OPTIONS') return res.status(200).end()
-  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' })
+  if (req.method !== 'GET')     return res.status(405).json({ error: 'GET only' })
 
-  const q = (req.query.q || '').trim()
-  if (q.length < 2) return res.status(200).json({ results: [] })
-
-  const apiKey = process.env.USDA_API_KEY || 'DEMO_KEY'
+  const { q, barcode } = req.query
 
   try {
-    const url = new URL('https://api.nal.usda.gov/fdc/v1/foods/search')
-    url.searchParams.set('query',    q)
-    url.searchParams.set('api_key',  apiKey)
-    url.searchParams.set('pageSize', '10')
-    // Branded = packaged/restaurant items submitted by manufacturers
-    // Survey (FNDDS) = What We Eat in America survey — covers restaurant meals
-    // SR Legacy = USDA standard reference (raw ingredients)
-    url.searchParams.set('dataType', 'Branded,Survey (FNDDS),SR Legacy')
+    // ── Barcode lookup ────────────────────────────────────────────────────────
+    if (barcode) {
+      const code = barcode.trim().replace(/\D/g, '')
+      if (!code) return res.status(400).json({ error: 'Invalid barcode' })
 
-    const resp = await fetch(url.toString(), {
-      headers: { 'Content-Type': 'application/json' },
-    })
-
-    if (!resp.ok) {
-      const body = await resp.text()
-      throw new Error(`USDA ${resp.status}: ${body.slice(0, 120)}`)
+      // FDC stores GTINs as 14-digit strings; pad a 12-digit UPC to 14
+      const gtin = code.padStart(14, '0')
+      const url  = buildUrl('/foods/search', {
+        query:    gtin,
+        dataType: 'Branded',
+        pageSize: '1',
+      })
+      const resp = await fetch(url)
+      if (!resp.ok) throw new Error(`FDC barcode ${resp.status}`)
+      const data = await resp.json()
+      const foods = (data.foods || []).map(shapeFood)
+      return res.status(200).json({ foods, mode: 'barcode' })
     }
 
-    const data = await resp.json()
+    // ── Text search ───────────────────────────────────────────────────────────
+    const query = (q || '').trim()
+    if (query.length < 2) return res.status(200).json({ foods: [], mode: 'search' })
 
-    const results = (data.foods || [])
-      .map(food => {
-        const ns      = food.foodNutrients || []
-        const calories = getNutrient(ns, NUTRIENT.calories)
-        const protein  = getNutrient(ns, NUTRIENT.protein)
-        const carbs    = getNutrient(ns, NUTRIENT.carbs)
-        const fat      = getNutrient(ns, NUTRIENT.fat)
+    // Run Foundation/SR Legacy and Branded searches in parallel;
+    // Foundation gives best whole-food accuracy, Branded covers packaged goods.
+    const [genericResp, brandedResp] = await Promise.allSettled([
+      fetch(buildUrl('/foods/search', {
+        query, dataType: 'Foundation,SR Legacy', pageSize: '12',
+      })),
+      fetch(buildUrl('/foods/search', {
+        query, dataType: 'Branded', pageSize: '15',
+      })),
+    ])
 
-        // Skip entries with zero macro info
-        if (calories === 0 && protein === 0 && carbs === 0 && fat === 0) return null
+    const generic = genericResp.status === 'fulfilled' && genericResp.value.ok
+      ? (await genericResp.value.json()).foods || []
+      : []
+    const branded = brandedResp.status === 'fulfilled' && brandedResp.value.ok
+      ? (await brandedResp.value.json()).foods || []
+      : []
 
-        const servG     = parseFloat(food.servingSize) || 100
-        const servUnit  = (food.servingSizeUnit || 'g').toLowerCase()
-        const household = food.householdServingFullText || ''
+    // Generic first, then branded — matches priority requested in build spec
+    const merged = [...generic, ...branded]
+      .map(shapeFood)
+      // Drop entries with zero nutritional data
+      .filter(f => f.foodNutrients.length > 0)
 
-        const servLabel = household
-          ? `${household} (${servG}${servUnit})`
-          : `${servG}${servUnit}`
-
-        // Build a clean display name
-        const brand = food.brandOwner || food.brandName || ''
-        const desc  = food.description || ''
-        const name  = brand && !desc.toLowerCase().includes(brand.toLowerCase())
-          ? `${desc} — ${brand}`
-          : desc
-
-        return {
-          fdcId:              food.fdcId,
-          name:               name.trim(),
-          calories,
-          protein,
-          carbs,
-          fat,
-          serving_size_label: servLabel,
-          serving_size_g:     servG,
-          source:             'usda',
-        }
-      })
-      .filter(Boolean)
-      .slice(0, 8)
-
-    return res.status(200).json({ results })
+    return res.status(200).json({ foods: merged, mode: 'search' })
   } catch (err) {
-    console.error('food-search error:', err)
-    // Don't fail the whole UI — just return empty so the AI fallback kicks in
-    return res.status(200).json({ results: [], error: err.message })
+    console.error('food-search error:', err.message)
+    return res.status(200).json({ foods: [], mode: 'error', error: err.message })
   }
 }

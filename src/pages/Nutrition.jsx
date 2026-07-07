@@ -188,6 +188,14 @@ export default function Nutrition() {
   const [mfpError,   setMfpError]   = useState(null)
   const mfpFileRef = useRef(null)
 
+  // MFP CSV import
+  const [csvOpen,    setCsvOpen]    = useState(false)
+  const [csvItems,   setCsvItems]   = useState(null)   // parsed rows grouped by date
+  const [csvSel,     setCsvSel]     = useState(new Set())
+  const [csvLogging, setCsvLogging] = useState(false)
+  const [csvError,   setCsvError]   = useState(null)
+  const csvFileRef = useRef(null)
+
   // Camera / scanner mode ('search' | 'barcode' | 'photo')
   const [addMode, setAddMode] = useState('search')
 
@@ -269,6 +277,10 @@ export default function Nutrition() {
   const totalProt  = entries.reduce((s, e) => s + (e.protein_g || 0), 0)
   const totalCarbs = entries.reduce((s, e) => s + (e.carbs_g   || 0), 0)
   const totalFat   = entries.reduce((s, e) => s + (e.fat_g     || 0), 0)
+  // Calorie consistency: calories ≈ protein×4 + carbs×4 + fat×9
+  const macroCalEstimate = totalProt * 4 + totalCarbs * 4 + totalFat * 9
+  const calorieDrift     = entries.length > 0 && total > 0
+    ? Math.round(Math.abs(total - macroCalEstimate)) : 0
 
   const plannedTotal     = plannedMeals.reduce((s, p) => s + p.calories,         0)
   const plannedProtTotal = plannedMeals.reduce((s, p) => s + (p.protein_g || 0), 0)
@@ -387,11 +399,13 @@ export default function Nutrition() {
     const data = await insertEntry({
       user_id: user.id, date: selectedDate,
       food_name: result.name, calories: Math.round(result.calories),
-      protein_g: Math.round(result.protein), carbs_g: Math.round(result.carbs), fat_g: Math.round(result.fat),
+      protein_g: parseFloat((result.protein || 0).toFixed(1)),
+      carbs_g:   parseFloat((result.carbs   || 0).toFixed(1)),
+      fat_g:     parseFloat((result.fat     || 0).toFixed(1)),
       meal_tag: sectionKey,
     }, (result.fiber || result.sugar || result.sodium) ? {
-      fiber_g:   Math.round(result.fiber  || 0),
-      sugar_g:   Math.round(result.sugar  || 0),
+      fiber_g:   parseFloat((result.fiber  || 0).toFixed(1)),
+      sugar_g:   parseFloat((result.sugar  || 0).toFixed(1)),
       sodium_mg: Math.round(result.sodium || 0),
     } : null)
     if (data) setEntries(e => [...e, data])
@@ -556,6 +570,120 @@ export default function Nutrition() {
     setMfpSel(new Set())
     setMfpError(null)
     setMfpParsing(false)
+  }
+
+  // ── MFP CSV import ──────────────────────────────────────────────────────────
+  // MFP export format (header row):
+  //   Date,Meal,Food Name,Calories,Carbohydrates (g),Fat (g),Protein (g),
+  //   Sodium (mg),Sugar (g),Fiber (g)
+  function parseMfpCsv(text) {
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+    if (!lines.length) throw new Error('File is empty')
+
+    // Find the header row (MFP CSVs often have a title row before it)
+    const headerIdx = lines.findIndex(l =>
+      /date/i.test(l) && /meal/i.test(l) && /food/i.test(l) && /calorie/i.test(l))
+    if (headerIdx === -1) throw new Error('Could not find MFP header row (Date, Meal, Food Name, Calories…)')
+
+    const header = lines[headerIdx].split(',').map(h => h.trim().toLowerCase().replace(/\s*\(.*?\)\s*/g, '').trim())
+    const col = name => header.findIndex(h => h.includes(name))
+    const idx = {
+      date:     col('date'),
+      meal:     col('meal'),
+      name:     col('food'),
+      cal:      col('calorie'),
+      carbs:    col('carbohydrate'),
+      fat:      col('fat'),
+      protein:  col('protein'),
+      sodium:   col('sodium'),
+      sugar:    col('sugar'),
+      fiber:    col('fiber'),
+    }
+    if (idx.date < 0 || idx.name < 0 || idx.cal < 0) throw new Error('Missing required columns: Date, Food Name, Calories')
+
+    const MEAL_MAP = {
+      breakfast: 'breakfast', lunch: 'lunch', dinner: 'dinner',
+      snacks: 'snacks', snack: 'snacks',
+    }
+
+    const rows = []
+    for (let i = headerIdx + 1; i < lines.length; i++) {
+      const cells = lines[i].split(',').map(c => c.trim().replace(/^"|"$/g, ''))
+      if (cells.length < 4) continue
+      const name = cells[idx.name] || ''
+      if (!name || name.toLowerCase() === 'totals' || name.toLowerCase() === 'total') continue
+      const cal = parseFloat(cells[idx.cal]) || 0
+      if (cal === 0 && !name) continue
+
+      const mealRaw = (cells[idx.meal] || '').toLowerCase()
+      const meal_tag = MEAL_MAP[mealRaw] || 'snacks'
+
+      rows.push({
+        date:      cells[idx.date] || today,
+        meal_tag,
+        food_name: name,
+        calories:  cal,
+        protein_g: idx.protein >= 0 ? parseFloat(cells[idx.protein]) || 0 : 0,
+        carbs_g:   idx.carbs   >= 0 ? parseFloat(cells[idx.carbs])   || 0 : 0,
+        fat_g:     idx.fat     >= 0 ? parseFloat(cells[idx.fat])     || 0 : 0,
+        fiber_g:   idx.fiber   >= 0 ? parseFloat(cells[idx.fiber])   || 0 : 0,
+        sugar_g:   idx.sugar   >= 0 ? parseFloat(cells[idx.sugar])   || 0 : 0,
+        sodium_mg: idx.sodium  >= 0 ? parseFloat(cells[idx.sodium])  || 0 : 0,
+      })
+    }
+    if (!rows.length) throw new Error('No food entries found in file')
+    return rows
+  }
+
+  function handleCsvFile(file) {
+    if (!file) return
+    setCsvError(null)
+    const reader = new FileReader()
+    reader.onload = e => {
+      try {
+        const rows = parseMfpCsv(e.target.result)
+        // Dedupe against existing entries this session (same date + food name)
+        const existingKeys = new Set(entries.map(en => `${en.date}|${en.food_name.toLowerCase()}`))
+        const deduped = rows.filter(r => !existingKeys.has(`${r.date}|${r.food_name.toLowerCase()}`))
+        if (!deduped.length) { setCsvError('All entries already exist in your log.'); return }
+        setCsvItems(deduped)
+        setCsvSel(new Set(deduped.map((_, i) => i)))
+      } catch (err) { setCsvError(err.message) }
+    }
+    reader.readAsText(file)
+  }
+
+  async function logCsvItems() {
+    if (!csvItems) return
+    setCsvLogging(true)
+    const toLog = csvItems.filter((_, i) => csvSel.has(i))
+    for (const item of toLog) {
+      const data = await insertEntry({
+        user_id: user.id, date: item.date,
+        food_name: item.food_name,
+        calories:  Math.round(item.calories),
+        protein_g: parseFloat(item.protein_g.toFixed(1)),
+        carbs_g:   parseFloat(item.carbs_g.toFixed(1)),
+        fat_g:     parseFloat(item.fat_g.toFixed(1)),
+        meal_tag:  item.meal_tag,
+      }, (item.fiber_g || item.sugar_g || item.sodium_mg) ? {
+        fiber_g: parseFloat(item.fiber_g.toFixed(1)),
+        sugar_g: parseFloat(item.sugar_g.toFixed(1)),
+        sodium_mg: Math.round(item.sodium_mg),
+      } : null)
+      if (data && item.date === selectedDate) setEntries(e => [...e, data])
+    }
+    setCsvLogging(false)
+    setCsvOpen(false)
+    setCsvItems(null)
+    setCsvSel(new Set())
+  }
+
+  function closeCsv() {
+    setCsvOpen(false)
+    setCsvItems(null)
+    setCsvSel(new Set())
+    setCsvError(null)
   }
 
   function createCustomFood() {
@@ -765,26 +893,47 @@ export default function Nutrition() {
     <div>
       <div className="page-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <h1>Nutrition</h1>
-        <button
-          onClick={() => setMfpOpen(true)}
-          title="Import from MyFitnessPal screenshot"
-          style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            background: 'rgba(99,179,237,0.12)', border: '1px solid rgba(99,179,237,0.3)',
-            color: '#63b3ed', borderRadius: 8, padding: '6px 12px',
-            fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
-            transition: 'background .15s, border-color .15s',
-          }}
-          onMouseEnter={e => { e.currentTarget.style.background = 'rgba(99,179,237,0.22)'; e.currentTarget.style.borderColor = 'rgba(99,179,237,0.55)' }}
-          onMouseLeave={e => { e.currentTarget.style.background = 'rgba(99,179,237,0.12)'; e.currentTarget.style.borderColor = 'rgba(99,179,237,0.3)' }}
-        >
-          <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="3" y="3" width="18" height="18" rx="2"/>
-            <polyline points="9 12 12 15 15 12"/>
-            <line x1="12" y1="8" x2="12" y2="15"/>
-          </svg>
-          Import MFP
-        </button>
+        <div style={{ display: 'flex', gap: 7 }}>
+          <button
+            onClick={() => setCsvOpen(true)}
+            title="Import from MyFitnessPal CSV export"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              background: 'rgba(99,179,237,0.08)', border: '1px solid rgba(99,179,237,0.25)',
+              color: '#63b3ed', borderRadius: 8, padding: '6px 12px',
+              fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+              transition: 'background .15s, border-color .15s',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(99,179,237,0.18)'; e.currentTarget.style.borderColor = 'rgba(99,179,237,0.5)' }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'rgba(99,179,237,0.08)'; e.currentTarget.style.borderColor = 'rgba(99,179,237,0.25)' }}
+          >
+            <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
+              <line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/>
+            </svg>
+            CSV
+          </button>
+          <button
+            onClick={() => setMfpOpen(true)}
+            title="Import from MyFitnessPal screenshot"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              background: 'rgba(99,179,237,0.12)', border: '1px solid rgba(99,179,237,0.3)',
+              color: '#63b3ed', borderRadius: 8, padding: '6px 12px',
+              fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+              transition: 'background .15s, border-color .15s',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(99,179,237,0.22)'; e.currentTarget.style.borderColor = 'rgba(99,179,237,0.55)' }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'rgba(99,179,237,0.12)'; e.currentTarget.style.borderColor = 'rgba(99,179,237,0.3)' }}
+          >
+            <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2"/>
+              <polyline points="9 12 12 15 15 12"/>
+              <line x1="12" y1="8" x2="12" y2="15"/>
+            </svg>
+            Screenshot
+          </button>
+        </div>
       </div>
 
       <div className="page-body" style={{ paddingBottom: 110 }}>
@@ -1494,12 +1643,23 @@ export default function Nutrition() {
                                         </svg>
                                       )}
                                     </div>
-                                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-                                      <span style={{ color: item.source === 'usda' && item.generic ? GREEN : 'var(--text-light)', fontWeight: 600 }}>
-                                        {item.source === 'usda' ? (item.brand || 'USDA') : item.source === 'off' ? (item.brand || 'Branded') : 'My food'}
+                                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+                                      <span style={{
+                                        fontSize: 10, fontWeight: 700, padding: '1px 5px', borderRadius: 4,
+                                        background: item.source === 'usda' && item.generic
+                                          ? 'rgba(72,187,120,0.15)' : item.source === 'usda'
+                                          ? 'rgba(99,179,237,0.15)' : item.source === 'off'
+                                          ? 'rgba(246,173,85,0.15)' : 'rgba(160,174,192,0.15)',
+                                        color: item.source === 'usda' && item.generic
+                                          ? GREEN : item.source === 'usda'
+                                          ? '#63b3ed' : item.source === 'off'
+                                          ? AMBER : 'var(--text-muted)',
+                                        letterSpacing: '.03em',
+                                      }}>
+                                        {item.source === 'usda' ? (item.generic ? 'USDA' : (item.brand ? 'Branded' : 'USDA')) : item.source === 'off' ? (item.brand ? 'Branded' : 'Open FF') : 'Custom'}
                                       </span>
-                                      {' · '}P {Math.round(item.protein)}g · C {Math.round(item.carbs)}g · F {Math.round(item.fat)}g
-                                      {item.serving_size_label ? ` · per ${item.serving_size_label}` : ''}
+                                      <span>P {Math.round(item.protein)}g · C {Math.round(item.carbs)}g · F {Math.round(item.fat)}g</span>
+                                      {item.serving_size_label && <span>· per {item.serving_size_label}</span>}
                                     </div>
                                   </div>
                                   <div style={{ flexShrink: 0, textAlign: 'right' }}>
@@ -2574,6 +2734,188 @@ export default function Nutrition() {
                   })()}
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MFP CSV IMPORT MODAL ── */}
+      {csvOpen && (
+        <div
+          onClick={e => { if (e.target === e.currentTarget) closeCsv() }}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 9999, padding: '20px 16px',
+          }}
+        >
+          <div style={{
+            background: 'var(--card)', borderRadius: 16, width: '100%', maxWidth: 480,
+            maxHeight: '88vh', display: 'flex', flexDirection: 'column',
+            boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
+            animation: 'nutPanelUp .18s ease',
+          }}>
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '18px 20px 14px', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(99,179,237,0.12)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="#63b3ed" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                    <polyline points="14 2 14 8 20 8"/>
+                    <line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/>
+                  </svg>
+                </div>
+                <div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>Import MFP CSV</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>
+                    MFP app → More → Settings → Data → Export Data
+                  </div>
+                </div>
+              </div>
+              <button onClick={closeCsv}
+                style={{ background: 'none', border: 'none', cursor: 'pointer',
+                  color: 'var(--text-muted)', display: 'flex', padding: 6, borderRadius: 6 }}>
+                <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+              </button>
+            </div>
+
+            {/* Body */}
+            <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px' }}>
+              {!csvItems && (
+                <div>
+                  <input
+                    ref={csvFileRef}
+                    type="file"
+                    accept=".csv,text/csv"
+                    style={{ display: 'none' }}
+                    onChange={e => handleCsvFile(e.target.files?.[0])}
+                  />
+                  <button
+                    onClick={() => csvFileRef.current?.click()}
+                    style={{
+                      width: '100%', padding: '32px 20px', background: 'rgba(99,179,237,0.07)',
+                      border: '2px dashed rgba(99,179,237,0.35)', borderRadius: 12,
+                      cursor: 'pointer', display: 'flex', flexDirection: 'column',
+                      alignItems: 'center', gap: 10, fontFamily: 'inherit',
+                    }}
+                  >
+                    <svg width={28} height={28} viewBox="0 0 24 24" fill="none" stroke="#63b3ed" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                      <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+                    </svg>
+                    <span style={{ fontSize: 14, fontWeight: 600, color: '#63b3ed' }}>Choose CSV file</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                      MFP export: More → Settings → Data → Export Data
+                    </span>
+                  </button>
+                  {csvError && (
+                    <div style={{ marginTop: 12, padding: '10px 14px', background: 'rgba(252,129,74,0.12)',
+                      border: '1px solid rgba(252,129,74,0.3)', borderRadius: 8,
+                      fontSize: 12, color: '#fc814a' }}>
+                      {csvError}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {csvItems && (() => {
+                const selCount = csvSel.size
+                const byDate = {}
+                csvItems.forEach((item, i) => {
+                  if (!byDate[item.date]) byDate[item.date] = []
+                  byDate[item.date].push({ ...item, idx: i })
+                })
+                return (
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                      <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+                        {csvItems.length} entries · {selCount} selected
+                      </div>
+                      <button
+                        onClick={() => setCsvSel(csvSel.size === csvItems.length
+                          ? new Set() : new Set(csvItems.map((_, i) => i)))}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer',
+                          fontSize: 12, fontWeight: 600, color: '#63b3ed', padding: '2px 6px' }}
+                      >
+                        {csvSel.size === csvItems.length ? 'Deselect all' : 'Select all'}
+                      </button>
+                    </div>
+                    {Object.entries(byDate).map(([date, items]) => (
+                      <div key={date} style={{ marginBottom: 12 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)',
+                          textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 6 }}>
+                          {date}
+                        </div>
+                        {items.map(item => (
+                          <button key={item.idx}
+                            onClick={() => setCsvSel(s => {
+                              const n = new Set(s); n.has(item.idx) ? n.delete(item.idx) : n.add(item.idx); return n
+                            })}
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: 10, width: '100%',
+                              background: csvSel.has(item.idx) ? 'rgba(99,179,237,0.08)' : 'none',
+                              border: `1px solid ${csvSel.has(item.idx) ? 'rgba(99,179,237,0.25)' : 'transparent'}`,
+                              borderRadius: 8, padding: '8px 10px', cursor: 'pointer',
+                              marginBottom: 4, textAlign: 'left', fontFamily: 'inherit',
+                              transition: 'background .12s, border-color .12s',
+                            }}
+                          >
+                            <div style={{ width: 16, height: 16, borderRadius: 4, flexShrink: 0,
+                              border: `1.5px solid ${csvSel.has(item.idx) ? '#63b3ed' : 'var(--border)'}`,
+                              background: csvSel.has(item.idx) ? '#63b3ed' : 'none',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                              {csvSel.has(item.idx) && (
+                                <svg width={9} height={9} viewBox="0 0 10 10" fill="none" stroke="#000" strokeWidth="1.8" strokeLinecap="round">
+                                  <polyline points="1.5 5 4 7.5 8.5 2.5"/>
+                                </svg>
+                              )}
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)',
+                                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {item.food_name}
+                              </div>
+                              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>
+                                {item.meal_tag} · P {item.protein_g.toFixed(1)}g · C {item.carbs_g.toFixed(1)}g · F {item.fat_g.toFixed(1)}g
+                              </div>
+                            </div>
+                            <div style={{ flexShrink: 0, textAlign: 'right' }}>
+                              <div style={{ fontSize: 14, fontWeight: 800, color: '#63b3ed', fontFamily: 'var(--mono)' }}>
+                                {Math.round(item.calories)}
+                              </div>
+                              <div style={{ fontSize: 9, color: 'var(--text-muted)' }}>kcal</div>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    ))}
+                    {csvError && (
+                      <div style={{ marginTop: 8, padding: '10px 14px', background: 'rgba(252,129,74,0.12)',
+                        border: '1px solid rgba(252,129,74,0.3)', borderRadius: 8,
+                        fontSize: 12, color: '#fc814a' }}>
+                        {csvError}
+                      </div>
+                    )}
+                    <button
+                      onClick={logCsvItems}
+                      disabled={selCount === 0 || csvLogging}
+                      style={{
+                        width: '100%', marginTop: 8, padding: '12px 0',
+                        background: selCount === 0 ? 'rgba(255,255,255,0.06)' : '#63b3ed',
+                        color: selCount === 0 ? 'var(--text-muted)' : '#000',
+                        border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 700,
+                        cursor: selCount === 0 ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
+                      }}
+                    >
+                      {csvLogging ? 'Logging…' : `Log ${selCount} entr${selCount !== 1 ? 'ies' : 'y'}`}
+                    </button>
+                  </div>
+                )
+              })()}
             </div>
           </div>
         </div>

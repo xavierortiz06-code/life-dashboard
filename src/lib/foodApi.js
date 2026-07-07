@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────
 // Food data layer — real verified nutrition, no LLM dependency.
-//   • USDA FoodData Central  → generic/whole foods (Foundation, SR Legacy)
-//   • Open Food Facts        → branded foods + barcode lookups
+//   • USDA FoodData Central  → routed through /api/food-search (key stays server-side)
+//   • Open Food Facts        → branded foods + barcode fallback
 // Results are normalized to one shape and cached (memory + localStorage).
 //
 // Normalized food shape:
@@ -15,7 +15,6 @@
 // }
 // ─────────────────────────────────────────────────────────────────────
 
-const USDA_KEY = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_USDA_API_KEY) || 'DEMO_KEY'
 const LS = typeof localStorage !== 'undefined' ? localStorage : null
 
 // ── Built-in verified foods ──────────────────────────────────────────
@@ -116,7 +115,7 @@ function searchCommon(q) {
   return scored.sort((a, b) => b.score - a.score).map(s => s.food)
 }
 
-const CACHE_LS_KEY = 'food-search-cache-v1'
+const CACHE_LS_KEY = 'food-search-cache-v2'
 const CACHE_TTL    = 7 * 24 * 3600 * 1000 // 7 days
 const CACHE_MAX    = 60                   // queries kept in localStorage
 
@@ -237,10 +236,8 @@ function normalizeUsdaFood(item) {
 }
 
 export async function searchUsda(query, { signal } = {}) {
-  const url = `https://api.nal.usda.gov/fdc/v1/foods/search?api_key=${USDA_KEY}` +
-    `&query=${encodeURIComponent(query)}&dataType=Foundation,SR%20Legacy,Branded&pageSize=20`
-  const res = await fetch(url, { signal })
-  if (!res.ok) throw new Error(`USDA ${res.status}`)
+  const res = await fetch(`/api/food-search?q=${encodeURIComponent(query)}`, { signal })
+  if (!res.ok) throw new Error(`food-search ${res.status}`)
   const data = await res.json()
   return (data.foods || []).map(normalizeUsdaFood).filter(f => f.per100g.cal > 0 || f.per100g.prot > 0)
 }
@@ -326,7 +323,19 @@ export async function searchOff(query, { signal } = {}) {
   return []  // reached a backend but it had no usable matches
 }
 
+// Try FDC first (more reliable for US products), fall back to OFF.
 export async function lookupBarcode(code, { signal } = {}) {
+  // 1. FDC via server proxy (key stays hidden)
+  try {
+    const res = await fetch(`/api/food-search?barcode=${encodeURIComponent(code)}`, { signal })
+    if (res.ok) {
+      const data = await res.json()
+      const foods = (data.foods || []).map(normalizeUsdaFood).filter(f => f.per100g.cal > 0 || f.per100g.prot > 0)
+      if (foods.length > 0) return foods[0]
+    }
+  } catch { /* fall through to OFF */ }
+
+  // 2. Open Food Facts fallback
   const url = `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}` +
     `?fields=code,product_name,brands,serving_size,serving_quantity,nutriments`
   const res = await fetch(url, { signal })

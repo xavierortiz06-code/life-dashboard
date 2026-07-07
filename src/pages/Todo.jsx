@@ -135,6 +135,7 @@ export default function Todo() {
   const [loading, setLoading] = useState(!todoCache)
   const [dbError, setDbError] = useState(null)
   const [weekData, setWeekData] = useState(todoCache?.weekData ?? [])
+  const [scheduledMap, setScheduledMap] = useState(new Map()) // task_list id → task_date string
 
   // ── AI Today ordering ──
   const [aiTodayOrder,   setAiTodayOrder]   = useState(null)   // null=not fetched; string[] of 'src:id'
@@ -253,6 +254,22 @@ export default function Todo() {
     })
     setLoading(false)
     notify()
+
+    // Load which task_list items are scheduled (optional — table may not exist yet)
+    try {
+      const { data: schedRows } = await supabase
+        .from('schedule_day_tasks')
+        .select('source_id, task_date')
+        .eq('user_id', user.id)
+        .gte('task_date', TODAY)
+        .eq('completed', false)
+        .not('source_id', 'is', null)
+      const m = new Map()
+      for (const row of schedRows || []) {
+        if (!m.has(row.source_id)) m.set(row.source_id, row.task_date)
+      }
+      setScheduledMap(m)
+    } catch {}
   }, [user.id])
 
   useEffect(() => { load() }, [load])
@@ -1242,6 +1259,8 @@ export default function Todo() {
                       const isOverdue = task.due_date && task.due_date < TODAY
                       const expanded = expandedTask === task.id
                       const alreadyInFocus = focusTasks.some(f => f.task_list_id === task.id && !f.completed)
+                      const schedDate = scheduledMap.get(task.id)
+                      const schedLabel = schedDate ? (schedDate === TODAY ? 'Today' : new Date(schedDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' })) : null
                       return (
                         <div key={task.id}
                           className={completing.has(task.id) ? 'task-completing' : undefined}
@@ -1265,6 +1284,14 @@ export default function Todo() {
                               />
                               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
                                 <PriBadge priority={task.priority} />
+                                {schedLabel && (
+                                  <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--accent)', background: 'rgba(99,102,241,0.1)', padding: '2px 7px', borderRadius: 99, whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                                    <svg width={8} height={8} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                      <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+                                    </svg>
+                                    Scheduled · {schedLabel}
+                                  </span>
+                                )}
                                 {task.due_date && (
                                   <span style={{ fontSize: 11, color: isOverdue ? 'var(--danger)' : isToday ? 'var(--warning)' : 'var(--text-light)', fontWeight: 600 }}>
                                     {isToday ? '📌 Due today' : isOverdue ? `⚠ ${formatShortDate(task.due_date)}` : formatShortDate(task.due_date)}
