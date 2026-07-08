@@ -397,7 +397,58 @@ export function deleteCustomFood(id) {
 // ── Merged search ────────────────────────────────────────────────────
 
 function dedupeKey(f) {
-  return `${(f.name || '').toLowerCase().replace(/\s+/g, ' ')}|${(f.brand || '').toLowerCase()}`
+  return `${(f.name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()}|${(f.brand || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()}`
+}
+
+// ── Relevance ranking — MFP-style ────────────────────────────────────
+// Scores every result against the query so the food you meant is on top:
+// exact name > name starts with query > all words matched at word starts >
+// all words present > partial. Whole foods and your own foods get a boost;
+// long ingredient-list names and zero-data entries sink.
+function relevanceScore(f, q, tokens) {
+  const name = (f.name || '').toLowerCase()
+  const brand = (f.brand || '').toLowerCase()
+  const hay = `${name} ${brand}`
+  let score = 0
+
+  if (name === q) score = 1000
+  else if (name.startsWith(q)) score = 650
+  else if (name.includes(q)) score = 480
+  else {
+    let all = true, wordStarts = 0
+    for (const t of tokens) {
+      if (!hay.includes(t)) { all = false; break }
+      if (new RegExp(`(^|[^a-z])${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(hay)) wordStarts++
+    }
+    if (all) score = 280 + wordStarts * 40
+    else {
+      const some = tokens.filter(t => hay.includes(t)).length
+      score = (some / Math.max(tokens.length, 1)) * 120
+    }
+  }
+
+  // Source quality boosts
+  if (f.source === 'custom') score += 160          // your own foods first
+  if (f.id?.startsWith?.('common-')) score += 140  // built-in verified staples
+  if (f.generic) score += 70                       // USDA whole foods over branded noise
+  if (f.source === 'restaurant') score += 90       // exact chain items
+
+  // Penalties: unusably long ingredient names, missing data
+  const len = name.length
+  if (len > 40) score -= Math.min((len - 40) * 0.8, 40)
+  const commas = (name.match(/,/g) || []).length
+  if (commas > 2) score -= (commas - 2) * 12
+  if (!f.calories && !f.protein) score -= 80
+
+  return score
+}
+
+function rankResults(results, q) {
+  const tokens = q.split(/\s+/).filter(t => t.length >= 2)
+  return results
+    .map(f => ({ f, s: relevanceScore(f, q, tokens) }))
+    .sort((a, b) => b.s - a.s)
+    .map(x => x.f)
 }
 
 // Keep only branded products that actually relate to the query — OFF returns
@@ -435,10 +486,18 @@ export async function searchFoods(query, { signal } = {}) {
   const customHits = getCustomFoods().filter(f =>
     f.name.toLowerCase().includes(q) || (f.brand || '').toLowerCase().includes(q))
   const commonHits = searchCommon(q)
-  const localHits  = [...customHits, ...commonHits]
+
+  // Restaurant chain items ("big mac", "chipotle bowl") — official published data
+  let restaurantHits = []
+  try {
+    const { searchRestaurantItems } = await import('./restaurantMenus')
+    restaurantHits = searchRestaurantItems(q)
+  } catch { /* module unavailable — skip */ }
+
+  const localHits = [...customHits, ...commonHits, ...restaurantHits]
 
   const cached = cacheLookup(q)
-  if (cached) return { results: dedupeMerge(localHits, cached).slice(0, 25), failed: false }
+  if (cached) return { results: rankResults(dedupeMerge(localHits, cached), q).slice(0, 25), failed: false }
 
   const [usdaRes, offRes] = await Promise.allSettled([
     searchUsda(q, { signal }),
@@ -451,12 +510,12 @@ export async function searchFoods(query, { signal } = {}) {
   // Generic whole foods first (USDA Foundation/SR), then relevant branded
   const generic = usda.filter(f => f.generic)
   const branded = relevantBranded([...off, ...usda.filter(f => !f.generic)], q)
-  const remoteMerged = dedupeMerge(generic, branded).slice(0, 20)
+  const remoteMerged = dedupeMerge(generic, branded).slice(0, 24)
 
   if (!remoteFailed) cacheStore(q, remoteMerged)
   // Only truly "failed" if remote died AND we have nothing built-in to show
   return {
-    results: dedupeMerge(localHits, remoteMerged).slice(0, 25),
+    results: rankResults(dedupeMerge(localHits, remoteMerged), q).slice(0, 25),
     failed: remoteFailed && localHits.length === 0,
   }
 }

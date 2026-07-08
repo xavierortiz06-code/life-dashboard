@@ -88,12 +88,17 @@ export default async function handler(req, res) {
 
     // Run Foundation/SR Legacy and Branded searches in parallel;
     // Foundation gives best whole-food accuracy, Branded covers packaged goods.
+    // requireAllWords keeps multi-word queries precise ("greek yogurt" won't
+    // return plain yogurt) — MFP-style matching.
+    const multiWord = query.trim().split(/\s+/).length > 1
     const [genericResp, brandedResp] = await Promise.allSettled([
       fetch(buildUrl('/foods/search', {
-        query, dataType: 'Foundation,SR Legacy', pageSize: '12',
+        query, dataType: 'Foundation,SR Legacy', pageSize: '15',
+        ...(multiWord ? { requireAllWords: 'true' } : {}),
       })),
       fetch(buildUrl('/foods/search', {
-        query, dataType: 'Branded', pageSize: '15',
+        query, dataType: 'Branded', pageSize: '20',
+        ...(multiWord ? { requireAllWords: 'true' } : {}),
       })),
     ])
 

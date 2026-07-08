@@ -7,6 +7,9 @@ import SkeletonList from '../components/Skeleton'
 import { getActiveDate, formatShortDate } from '../lib/dateUtils'
 import { BarcodeDetector as BarcodeDetectorPolyfill } from 'barcode-detector'
 import { searchFoods, lookupBarcode as offLookupBarcode, getCustomFoods, saveCustomFood, deleteCustomFood, macrosFor } from '../lib/foodApi'
+import { FoodIcon } from '../lib/foodIcons'
+import { detectRestaurant } from '../lib/restaurantMenus'
+import RestaurantBuilder from '../components/RestaurantBuilder'
 
 // Photo AI needs a real backend — keep the UI but disable until one exists
 const PHOTO_AI_ENABLED = false
@@ -154,6 +157,9 @@ export default function Nutrition() {
   const [qtyMode,    setQtyMode]    = useState('servings')
   const [measureIdx, setMeasureIdx] = useState(0)
   const [suggestFailed, setSuggestFailed] = useState(false)
+
+  // Restaurant order builder (Chipotle, Subway, …)
+  const [builderRest, setBuilderRest] = useState(null)
 
   // Add-panel source tabs + custom food / quick add forms
   const [foodTab,        setFoodTab]        = useState('all') // all | recent | frequent | myfoods | meals
@@ -1615,18 +1621,50 @@ export default function Nutrition() {
                                 </div>
                               )}
 
+                              {/* Restaurant detected → order builder banner */}
+                              {(() => {
+                                const rest = detectRestaurant(searchQuery)
+                                if (!rest?.builder) return null
+                                return (
+                                  <button
+                                    onMouseDown={() => { setBuilderRest(rest); setSuggestsOpen(false) }}
+                                    style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12,
+                                      padding: '12px 14px', border: 'none', cursor: 'pointer',
+                                      textAlign: 'left', fontFamily: 'inherit',
+                                      background: 'linear-gradient(90deg, rgba(167,139,250,0.12) 0%, rgba(167,139,250,0.04) 100%)',
+                                      borderBottom: '1px solid rgba(167,139,250,0.2)',
+                                      animation: 'nutRowIn .25s cubic-bezier(0.22,1,0.36,1) both' }}>
+                                    <FoodIcon category="restaurant" size={34} />
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                      <div style={{ fontSize: 13, fontWeight: 700, color: '#c4b5fd' }}>
+                                        Build your {rest.name} order
+                                      </div>
+                                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>
+                                        Pick your exact ingredients · official nutrition data
+                                      </div>
+                                    </div>
+                                    <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="#c4b5fd"
+                                      strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                                      <polyline points="9 18 15 12 9 6"/>
+                                    </svg>
+                                  </button>
+                                )
+                              })()}
+
                               {/* Results */}
                               {suggestions.map((item, i) => (
                                 <button key={item.fdcId || i}
                                   onMouseDown={() => selectSuggestion(item)}
                                   style={{ width: '100%', display: 'flex', alignItems: 'center',
-                                    justifyContent: 'space-between', gap: 12,
-                                    padding: '10px 14px', background: 'none', border: 'none',
+                                    gap: 10,
+                                    padding: '9px 14px', background: 'none', border: 'none',
                                     borderBottom: i < suggestions.length - 1 ? '1px solid rgba(255,255,255,0.06)' : 'none',
                                     cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit',
-                                    transition: 'background .1s' }}
+                                    transition: 'background .1s',
+                                    animation: `nutRowIn .28s ${Math.min(i, 8) * 0.03}s cubic-bezier(0.22,1,0.36,1) both` }}
                                   onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.07)'}
                                   onMouseLeave={e => e.currentTarget.style.background = 'none'}>
+                                  <FoodIcon food={item} size={30} />
                                   <div style={{ flex: 1, minWidth: 0 }}>
                                     <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)',
                                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -1646,17 +1684,19 @@ export default function Nutrition() {
                                     <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
                                       <span style={{
                                         fontSize: 10, fontWeight: 700, padding: '1px 5px', borderRadius: 4,
-                                        background: item.source === 'usda' && item.generic
+                                        background: item.source === 'restaurant'
+                                          ? 'rgba(167,139,250,0.15)' : item.source === 'usda' && item.generic
                                           ? 'rgba(72,187,120,0.15)' : item.source === 'usda'
                                           ? 'rgba(99,179,237,0.15)' : item.source === 'off'
                                           ? 'rgba(246,173,85,0.15)' : 'rgba(160,174,192,0.15)',
-                                        color: item.source === 'usda' && item.generic
+                                        color: item.source === 'restaurant'
+                                          ? '#c4b5fd' : item.source === 'usda' && item.generic
                                           ? GREEN : item.source === 'usda'
                                           ? '#63b3ed' : item.source === 'off'
                                           ? AMBER : 'var(--text-muted)',
                                         letterSpacing: '.03em',
                                       }}>
-                                        {item.source === 'usda' ? (item.generic ? 'USDA' : (item.brand ? 'Branded' : 'USDA')) : item.source === 'off' ? (item.brand ? 'Branded' : 'Open FF') : 'Custom'}
+                                        {item.source === 'restaurant' ? (item.brand || 'Restaurant') : item.source === 'usda' ? (item.generic ? 'USDA' : (item.brand ? 'Branded' : 'USDA')) : item.source === 'off' ? (item.brand ? 'Branded' : 'Open FF') : 'Custom'}
                                       </span>
                                       <span>P {Math.round(item.protein)}g · C {Math.round(item.carbs)}g · F {Math.round(item.fat)}g</span>
                                       {item.serving_size_label && <span>· per {item.serving_size_label}</span>}
@@ -2921,6 +2961,18 @@ export default function Nutrition() {
         </div>
       )}
 
+      {/* ── Restaurant order builder ── */}
+      {builderRest && (
+        <RestaurantBuilder
+          restaurant={builderRest}
+          onClose={() => setBuilderRest(null)}
+          onAdd={async (order) => {
+            await addResult(addingTo || 'lunch', order)
+            setBuilderRest(null)
+          }}
+        />
+      )}
+
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
 
       <style>{`
@@ -2946,6 +2998,10 @@ export default function Nutrition() {
         @keyframes nutCamFadeIn {
           from { opacity: 0; transform: scale(0.98); }
           to   { opacity: 1; transform: scale(1); }
+        }
+        @keyframes nutRowIn {
+          from { opacity: 0; transform: translateX(-6px); }
+          to   { opacity: 1; transform: translateX(0); }
         }
       `}</style>
     </div>
